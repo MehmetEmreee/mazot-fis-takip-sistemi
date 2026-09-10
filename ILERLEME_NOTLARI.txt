@@ -330,6 +330,40 @@ KULLANIM (300 fiş için, yarın):
   test verileri ve ayar dosyaları sonrasında temizlendi.
 
 
+3i) OCR DOĞRULUK ÇALIŞMASI (ölçümlü)
+----------------------------------------
+Referans: 6 fiş, alanlar görselden ELLE okunarak doğrulandı (42 alan).
+
+  Mevcut hâl (EXIF yok, eski prompt)   : %61,9 tam doğru
+  EXIF düzeltmesi + hedefli prompt     : %81,0 tam  (%92,9 sözlükle kurtarılır)
+  + belge dikleştirme                  : %83,3 tam  (süre 16,9 -> 19,8 sn)
+
+- EXIF: telefon fotoğrafları "90° döndür" notu taşıyor, PIL bunu kendiliğinden
+  UYGULAMIYOR; fişlerin ~%99'u modele yan gidiyordu. extract_json.kucult()
+  içinde ImageOps.exif_transpose ile düzeltildi (Codex uyguladı).
+- Prompt: dört hedefli kural eklendi (Türkçe harfleri latinleştirme, boş
+  hücredeki çizgiyi '1' sanma, litredeki toplamayı hesapla, boş 'Sayın:'
+  alanına matbu logoyu yazma). Ölçülen kazanç en büyük tek kalem.
+- Dikleştirme: goruntu_hazirla.py yazıldı (OpenCV; kağıdın 4 köşesi +
+  warpPerspective). Çalışıyor ama kazanç marjinal (+2 puan) ve süre artıyor;
+  varsayılan akışa BAĞLANMADI, isteğe bağlı kullanılabilir.
+- Hücre hücre okuma: DENENDİ, KULLANILMADI. img2table bu fotoğraflarda hiç
+  tablo bulamadı (0/3). Kendi çizgi tespiti de yetersiz; kontur yöntemi 4
+  fişin 3'ünde doğru, 1'inde tüm sayfayı tablo sandı. Yanlış kırpma sessiz
+  veri kaybı demek (litre hücresi kayboluyor), o yüzden ertelendi. Doğru
+  yapılırsa (ince açı düzeltme + gerçek çizgi tespiti) potansiyeli var.
+
+DİKKAT — DEFTERDEKİ "FATURA NO" FİŞTEKİ "MRK" DEĞİL
+  Ground truth için defteri kullanmayı denerken çıktı: dosya adındaki MRK
+  numarası ile defterin B sütunundaki FATURA NO farklı numaralandırmalar.
+  Örnek: fotoğraf 002395 = 24/08/2026, GUS 938, MEHMET KAYA; defterdeki
+  2395 = 30/03/2026, 34 FEM 934, DURSUN ALİ GÜREK. Ayrıca defterdeki
+  numaraların %12'si birden fazla satırda geçiyor (koçanlar tekrar ediyor).
+  SONUÇ: (1) mükerrer fiş kontrolü fiş no ile YAPILAMAZ, (2) excel_aktar
+  MRK'yı FATURA NO sütununa yazıyor — bunun muhasebe açısından doğru olup
+  olmadığı kullanıcıya sorulmalı.
+
+
 4) AÇIK NOKTALAR / YARIN KONUŞULACAKLAR
 -------------------------------------------
 - Sabit bir araç filosu (bilinen plaka listesi) yok — bu yüzden plaka
@@ -347,3 +381,58 @@ KULLANIM (300 fiş için, yarın):
 - Gerçekçi beklenti: %100 hatasız otomasyon mümkün değil; hedef, elle
   kontrol edilmesi gereken satır sayısını (sarı işaretliler) mümkün
   olduğunca azaltmak.
+
+
+5) 11 EYLÜL İÇİN OCR GELİŞTİRME PLANI
+--------------------------------------
+10 Eylül'de internetteki güncel belge/fiş okuma sistemlerinin yaklaşımı
+incelendi ve mevcut uygulamadaki hücre deneyleriyle karşılaştırıldı.
+
+ANA KARAR:
+- Fotoğrafların çoğu zaten dik; her fotoğrafa pahalı perspektif düzeltme
+  uygulamak ana çözüm değil.
+- Bütün hücreleri körlemesine ayrı ayrı LLM'e göndermek kullanılmayacak.
+  Önceki ölçümde bağlam kaybı, yanlış alan eşleştirme ve süre artışı oluştu.
+- Kullanıcının hücreyi yakından okutma fikri, yalnızca şüpheli alanlarda ve
+  alanın etiketi/kimliği modele açıkça verilerek kullanılacak.
+- Bu belgeler genel market fişinden ziyade sabit şablonlu, el yazılı formdur.
+  Bu yüzden genel tablo çizgisi tespiti yerine REFERANS ŞABLONLA HİZALAMA
+  ve sabit alan bölgeleri daha uygun görülüyor.
+
+PLANLANAN HİBRİT AKIŞ:
+1. Fotoğraf için bulanıklık, karanlık, parlama, kesilme ve yön kontrolü.
+2. Temiz bir fişi referans alıp yeni fotoğrafı basılı logo/etiketlere göre
+   hizalama (gerekirse homografi); sonra sabit alan bölgelerini çıkarma.
+3. Bağlamı korumak için ilk okumayı mevcut Qwen tam-sayfa yöntemiyle yapma.
+4. İş kuralları, Excel geçmişi, kullanıcı düzeltmeleri ve mükerrer kontrolle
+   her alan için birleşik bir güven/şüphe puanı üretme.
+5. Yalnız şüpheli alanı, basılı etiketi de kırpmada bırakarak ikinci kez
+   okutma. Prompt'ta alanı açıkça söyleme (örn. "Bu K.M. alanıdır").
+6. Tam sayfa ve yakın okuma aynıysa kabul; farklıysa kullanıcıya sarı uyarı.
+7. Hücre güvenle bulunamazsa ilk sonucu koruyup manuel kontrole bırakma.
+
+YARIN İLK YAPILACAKLAR:
+- Onaylanmış fotoğraf + düzeltilmiş kayıt çiftlerinden 40-50 fişlik sabit,
+  temsil gücü yüksek ve bir daha eğitimde kullanılmayacak test seti ayır.
+- Başlangıç doğruluğunu alan bazında ölç: fiş no, tarih, firma, plaka,
+  ad-soyad, kilometre ve litre.
+- Bir referans fiş seçip şablon hizalama prototipi kur. Genel Hough çizgi
+  sıralamasına güvenme; logo ve basılı etiketleri hizalama çapası olarak dene.
+- Alan kırpmalarının gerçekten doğru hücreyi içerdiğini görsel olarak ölç.
+- Sonra sadece şüpheli alan yeniden okumasını küçük bir örneklemde dene.
+- Eski tam-sayfa yöntemi, hibrit yöntem ve gerekirse alternatif yerel/bulut
+  belge servislerini AYNI test setinde süre + alan doğruluğuyla karşılaştır.
+- Sonuç ölçülmeden canlı uygulamaya veya dağıtılan EXE'ye bağlama.
+
+VERİ KONUSUNDA ÖNEMLİ NOT:
+- Eski Excel satırları MRK numarasıyla güvenilir biçimde eşleşmiyor; onları
+  doğrudan fotoğraf ground truth'u sayma.
+- Uygulamada kullanıcı tarafından onaylanmış ve aynı fotoğrafa bağlı JSON
+  kayıtları gerçek eğitim/değerlendirme verisi olarak kullan.
+- Kullanıcının yaklaşık 300 onaylı fişi ileride fişe özel model veya düzeltme
+  sözlüğü geliştirmek için en değerli veri setidir; yedekleri korunmalı.
+
+BAŞARI ÖLÇÜTÜ:
+- Amaç yalnız genel yüzdeyi yükseltmek değil; kullanıcıya gösterilen yanlış
+  veya gereksiz uyarı sayısını ve fiş başına kontrol süresini düşürmek.
+- Çoğu fiş tek model çağrısıyla bitmeli; yalnız şüpheliler ikinci çağrı almalı.

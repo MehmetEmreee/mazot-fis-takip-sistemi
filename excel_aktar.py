@@ -22,6 +22,7 @@ ayrı bir süreçte, elle işleniyor.
 
 import json
 import re
+import shutil
 import sys
 from copy import copy
 from datetime import datetime
@@ -45,6 +46,17 @@ SUTUN_ETIKETLERI = {
 }
 # Son dolu satırı ararken bakılan sütunlar (yazdığımız sütunlar).
 TARANAN_SUTUNLAR = (1, 2, 3, 4, 5, 6, 8)
+
+
+def aktarim_oncesi_yedekle(xlsx_yolu: Path) -> Path:
+    """Her hedef Excel için günde bir kez, yazma öncesi güvenli kopya alır."""
+    yedek_klasoru = ROOT / "yedekler" / "excel_otomatik"
+    yedek_klasoru.mkdir(parents=True, exist_ok=True)
+    tarih = datetime.now().strftime("%Y-%m-%d")
+    hedef = yedek_klasoru / f"{xlsx_yolu.stem}_{tarih}_aktarim_oncesi{xlsx_yolu.suffix}"
+    if not hedef.exists():
+        shutil.copy2(xlsx_yolu, hedef)
+    return hedef
 
 
 def yukle_json(yol: Path, varsayilan):
@@ -238,6 +250,11 @@ def aktar(xlsx_yolu: Path, sayfa: str, baslangic_satir: int | None = None) -> di
         return {"aktarilan": 0, "detay": []}
 
     try:
+        yedek_yolu = aktarim_oncesi_yedekle(xlsx_yolu)
+    except OSError as exc:
+        return {"hata": f"Excel yedeği alınamadığı için aktarım durduruldu: {exc}"}
+
+    try:
         wb = load_workbook(xlsx_yolu)
     except Exception as exc:
         return {"hata": f"Dosya açılamadı ({exc}). Excel'de açıksa kapatıp tekrar dene."}
@@ -291,6 +308,7 @@ def aktar(xlsx_yolu: Path, sayfa: str, baslangic_satir: int | None = None) -> di
         "aktarilan": len(aktarilacaklar), "detay": detay,
         "ilk_satir": baslangic, "son_satir": satir - 1,
         "dosya": str(xlsx_yolu), "sayfa": sayfa,
+        "yedek": str(yedek_yolu),
     }
 
 

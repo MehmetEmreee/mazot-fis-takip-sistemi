@@ -133,6 +133,8 @@ button { color: inherit; }
 .suggestion-copy em { color: var(--green-dark); font-style: normal; font-weight: 800; }
 .suggestion-apply { min-height: 32px; padding: 0 10px; border: 1px solid #9fc7b4; border-radius: 8px; color: var(--green-dark); background: white; cursor: pointer; font-size: 11px; font-weight: 800; }
 .suggestion-apply:hover { background: var(--green-soft); }
+.suggestion-apply-all { min-height: 30px; padding: 0 10px; border: 1px solid #8fbea6; border-radius: 8px; color: white; background: var(--green); cursor: pointer; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.suggestion-apply-all:hover { background: var(--green-dark); }
 #receiptForm { padding: 18px; }
 .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .field.full { grid-column: 1 / -1; }

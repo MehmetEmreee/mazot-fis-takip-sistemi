@@ -179,6 +179,21 @@ function renderExcelSuggestions(receipt) {
   });
 }
 
+function applyAllSuggestions() {
+  const suggestions = currentReceipt()?._excel_onerileri?.oneriler || [];
+  let applied = 0;
+  suggestions.forEach((suggestion) => {
+    const input = form.elements[suggestion.alan];
+    if (!input) return;
+    input.value = suggestion.onerilen;
+    input.classList.toggle("changed", input.value !== input.dataset.original);
+    applied += 1;
+  });
+  if (!applied) return;
+  $("#excelSuggestions").classList.add("hidden");
+  toast(`${applied} geçmiş önerisi uygulandı`);
+}
+
 function currentReceipt() {
   return state.receipts.find((r) => r._dosya === state.selectedFilename) || null;
 }
@@ -515,6 +530,7 @@ $("#excelFile").addEventListener("change", () => loadExcelSheets());
 $("#excelSheet").addEventListener("change", loadExcelPreview);
 $("#excelConfirm").addEventListener("click", confirmExcelExport);
 $("#excelLearn").addEventListener("click", learnFromExcel);
+$("#applyAllSuggestions").addEventListener("click", applyAllSuggestions);
 $("#excelClose").addEventListener("click", () => $("#excelModal").classList.add("hidden"));
 $("#excelCancel").addEventListener("click", () => $("#excelModal").classList.add("hidden"));
 $("#excelModal").addEventListener("click", (event) => {

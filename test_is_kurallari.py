@@ -14,7 +14,9 @@ from openpyxl import load_workbook
 
 import excel_aktar
 import excel_ogrenme
-from normalizasyon import fis_normalize_et, kilometreyi_duzelt
+import uygulama
+from dogrulama import kaydi_dogrula
+from normalizasyon import fis_normalize_et, kilometreyi_duzelt, plakayi_duzelt
 
 
 ROOT = Path(__file__).resolve().parent
@@ -36,6 +38,42 @@ class NormalizasyonTesti(unittest.TestCase):
         for deger in ("10", "123456", "-"):
             self.assertEqual(kilometreyi_duzelt(deger), deger)
         self.assertEqual(fis_normalize_et({"km": "1"})["km"], "-")
+
+    def test_bosluk_firma_ve_plaka_kurallari(self):
+        self.assertEqual(fis_normalize_et({"firma": "7"})["firma"], "Selim İnşaat")
+        self.assertEqual(plakayi_duzelt("H2 1663"), "34 H2 1663")
+        self.assertEqual(plakayi_duzelt("KAZIK MAK", ekipman_durumu=True), "KAZIK MAK")
+
+
+class DogrulamaTesti(unittest.TestCase):
+    def test_gecerli_arac_kaydi(self):
+        kayit = kaydi_dogrula(fis_normalize_et({
+            "fis_no": "001234", "tarih": "10/09/2026", "firma": "Selim İnşaat",
+            "plaka": "34 ABC 123", "ad_soyad": "Ali Veli", "km": "123456",
+            "litre": "250,5",
+        }))
+        self.assertFalse(kayit["_kontrol_gerekli"])
+
+    def test_tum_kritik_hatalar_aciklanir(self):
+        kayit = kaydi_dogrula(fis_normalize_et({
+            "fis_no": "-12", "tarih": "01/01/2025", "firma": "1",
+            "plaka": "34 A2 1", "ad_soyad": "-", "km": "7", "litre": "-",
+        }))
+        neden = kayit["_kontrol_nedeni"]
+        for parca in ("fiş no", "tarih", "plaka", "ad soyad", "kilometre", "litre"):
+            self.assertIn(parca, neden)
+
+
+class OtomatikYedekTesti(unittest.TestCase):
+    def test_gunluk_json_yedegi_bir_kez_olusturulur(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as gecici:
+            root = Path(gecici)
+            (root / "sonuclar.json").write_text("[]", encoding="utf-8")
+            ilk = uygulama.gunluk_veri_yedegi(root)
+            ikinci = uygulama.gunluk_veri_yedegi(root)
+            self.assertIsNotNone(ilk)
+            self.assertEqual(ilk, ikinci)
+            self.assertTrue(ilk.is_file())
 
 
 class KullaniciOgrenmesiTesti(unittest.TestCase):
@@ -95,6 +133,7 @@ class BirikimliExcelOgrenmesiTesti(unittest.TestCase):
 class ExcelAktarimTesti(unittest.TestCase):
     def test_dogru_satir_ve_sutunlara_yazar(self):
         kaynak_hash = sha256(KAYNAK_EXCEL)
+        eski_root = excel_aktar.ROOT
         eski_data = excel_aktar.DATA_FILE
         eski_ayar = excel_aktar.AYAR_FILE
         with tempfile.TemporaryDirectory(dir=ROOT) as gecici:
@@ -121,6 +160,7 @@ class ExcelAktarimTesti(unittest.TestCase):
             try:
                 excel_aktar.DATA_FILE = data
                 excel_aktar.AYAR_FILE = ayar
+                excel_aktar.ROOT = gecici
                 sonuc = excel_aktar.aktar(kopya, "2026 MAZOT")
                 self.assertNotIn("hata", sonuc)
                 self.assertEqual((sonuc["aktarilan"], sonuc["ilk_satir"], sonuc["son_satir"]), (2, 1308, 1309))
@@ -142,7 +182,9 @@ class ExcelAktarimTesti(unittest.TestCase):
                 kaydedilen = json.loads(data.read_text(encoding="utf-8"))
                 self.assertTrue(all(kayit.get("_excel_aktarildi") for kayit in kaydedilen))
                 self.assertEqual([k["_excel_satir"] for k in kaydedilen], [1308, 1309])
+                self.assertTrue(Path(sonuc["yedek"]).is_file())
             finally:
+                excel_aktar.ROOT = eski_root
                 excel_aktar.DATA_FILE = eski_data
                 excel_aktar.AYAR_FILE = eski_ayar
 

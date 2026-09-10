@@ -18,7 +18,7 @@ import sys
 import time
 from pathlib import Path
 import requests
-from PIL import Image
+from PIL import Image, ImageOps
 from dogrulama import kaydi_dogrula
 from normalizasyon import fis_normalize_et
 
@@ -26,6 +26,23 @@ OLLAMA_URL = "http://localhost:11434/api/chat"
 MODEL = os.environ.get("QWEN_MODEL", "qwen2.5vl:7b")
 IMG_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 MAX_KENAR = 1600  # uzun kenarı bu boyuta indir (hız için)
+NUM_CTX = int(os.environ.get("QWEN_NUM_CTX", "8192"))
+
+JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        alan: {"type": ["string", "null"]}
+        for alan in (
+            "fis_no", "tarih", "sayin_alani", "arac_plakasi_alani",
+            "adi_soyadi_alani", "km_alani", "litre",
+        )
+    },
+    "required": [
+        "fis_no", "tarih", "sayin_alani", "arac_plakasi_alani",
+        "adi_soyadi_alani", "km_alani", "litre",
+    ],
+    "additionalProperties": False,
+}
 
 PROMPT = """Bu bir Türkçe akaryakıt (mazot) satış fişi fotoğrafı. Fişte matbu
 (basılı) etiketler ve bunların yanına/altına elle yazılmış değerler var.
@@ -59,7 +76,17 @@ Kurallar:
 - Bir alan fişte yoksa veya okunamıyorsa değerini null yap.
 - Sayıları olduğu gibi (fişte yazdığı gibi) yaz, yorum katma.
 - Türkçe karakterleri (ç, ş, ı, ğ, ö, ü) koru.
-- Yanıtın SADECE geçerli JSON olsun, ```json gibi işaretleyici kullanma."""
+- Yanıtın SADECE geçerli JSON olsun, ```json gibi işaretleyici kullanma.
+
+DİKKAT EDİLECEK NOKTALAR:
+- Türkçe harfleri asla latinleştirme: Ç, Ş, İ, I, Ğ, Ü, Ö harflerini gördüğün
+  gibi yaz (VİNÇ'i VINS/VINC, FORKLİFT'i FORCLIFT yapma).
+- Bir hücrede sadece yatay bir çizgi/tire varsa o hücre BOŞTUR: null yaz,
+  çizgiyi '1' veya '-' diye okuma.
+- Litre hücresinde toplama varsa (örn. '(30+30)') sonucunu yaz: 60.
+- 'Sayın:' satırında el yazısı yoksa null yaz; fişin başlığındaki matbu
+  'Selim İnşaat' yazısını oraya kopyalama.
+- 'MRK' numarasını rakam rakam say, baştaki sıfırlar dahil hepsini yaz."""
 
 
 def esle(ham: dict) -> dict:
@@ -100,14 +127,21 @@ def esle(ham: dict) -> dict:
     }
 
 
-def kucult(image_path: Path, max_kenar=MAX_KENAR) -> bytes:
-    img = Image.open(image_path).convert("RGB")
+def jpeg_hazirla(img: Image.Image, max_kenar=MAX_KENAR) -> bytes:
+    img = img.convert("RGB")
     oran = max_kenar / max(img.size)
     if oran < 1:
         img = img.resize((int(img.width * oran), int(img.height * oran)), Image.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=90)
     return buf.getvalue()
+
+
+def kucult(image_path: Path, max_kenar=MAX_KENAR) -> bytes:
+    # Telefonun EXIF yön bilgisini piksele uygula; yan/dik ters fişler modelin
+    # doğruluğunu ve süresini ciddi biçimde bozmasın.
+    img = ImageOps.exif_transpose(Image.open(image_path))
+    return jpeg_hazirla(img, max_kenar)
 
 
 def plaka_supheli_mi(plaka) -> bool:
@@ -150,15 +184,24 @@ def dogrula(veri: dict) -> dict:
     return kaydi_dogrula(fis_normalize_et(veri))
 
 
-def resmi_oku(image_path: Path) -> dict:
-    b64 = base64.b64encode(kucult(image_path)).decode("utf-8")
+def resmi_oku(
+    image_path: Path, *, model: str | None = None, max_kenar: int | None = None,
+) -> dict:
+    """Bir fişi okur. Model/çözünürlük parametreleri regresyon testi içindir."""
+    secilen_model = model or MODEL
+    secilen_kenar = max_kenar or MAX_KENAR
+    b64 = base64.b64encode(kucult(image_path, secilen_kenar)).decode("utf-8")
 
     payload = {
-        "model": MODEL,
+        "model": secilen_model,
         "messages": [{"role": "user", "content": PROMPT, "images": [b64]}],
         "stream": False,
-        "options": {"temperature": 0.0, "num_ctx": 8192},
-        "format": "json",
+        "options": {
+            "temperature": 0.0, "num_ctx": NUM_CTX, "num_predict": 260,
+            "seed": 42,
+        },
+        "format": JSON_SCHEMA,
+        "keep_alive": "30m",
     }
 
     t0 = time.time()
@@ -179,6 +222,8 @@ def resmi_oku(image_path: Path) -> dict:
 
     veri["_dosya"] = image_path.name
     veri["_sure_sn"] = round(dt, 1)
+    veri["_model"] = secilen_model
+    veri["_max_kenar"] = secilen_kenar
     return fis_normalize_et(dogrula(veri))
 
 
