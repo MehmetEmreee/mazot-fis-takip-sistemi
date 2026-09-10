@@ -94,6 +94,14 @@
               <div><strong>Kontrol öneriliyor</strong><p id="warningText"></p></div>
             </div>
 
+            <div class="excel-suggestions hidden" id="excelSuggestions">
+              <div class="suggestion-head">
+                <div><strong>Excel geçmişinden öneri</strong><small id="suggestionSource"></small></div>
+                <span aria-hidden="true">↗</span>
+              </div>
+              <div id="suggestionList"></div>
+            </div>
+
             <form id="receiptForm" autocomplete="off">
               <div class="field-grid">
                 <label class="field"><span>Fiş No (MRK)</span><input name="fis_no" /></label>
@@ -166,6 +174,10 @@
               <summary>Sütun eşleştirmesi ve sayfa başlıkları</summary>
               <div id="previewColumns"></div>
             </details>
+            <button class="button learn-button" id="excelLearn" type="button">
+              Bu sayfadan düzeltme önerilerini öğren
+            </button>
+            <small class="learning-status" id="learningStatus"></small>
           </div>
 
           <p class="modal-error hidden" id="excelError"></p>

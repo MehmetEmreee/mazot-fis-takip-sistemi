@@ -43,6 +43,12 @@ def firmayi_duzelt(firma) -> str:
     return metin
 
 
+def kilometreyi_duzelt(km) -> str:
+    """Tek haneli OCR kilometrelerini okunamamış değer olarak işaretler."""
+    metin = bos_degeri_duzelt(km)
+    return BOS_DEGER if re.fullmatch(r"\d", metin) else metin
+
+
 def fis_normalize_et(veri: dict) -> dict:
     """Bir fiş kaydını yerinde günceller ve aynı sözlüğü döndürür."""
     for alan in TABLO_ALANLARI:
@@ -50,6 +56,7 @@ def fis_normalize_et(veri: dict) -> dict:
     veri["firma"] = firmayi_duzelt(
         None if veri.get("firma") == BOS_DEGER else veri.get("firma")
     )
+    veri["km"] = kilometreyi_duzelt(veri.get("km"))
     veri["plaka"] = plakayi_duzelt(
         veri.get("plaka"), bool(veri.get("_ekipman_durumu"))
     )

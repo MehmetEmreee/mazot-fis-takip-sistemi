@@ -1,4 +1,5 @@
 const FIELDS = ["fis_no", "tarih", "firma", "plaka", "ad_soyad", "km", "litre"];
+const FIELD_LABELS = { firma: "Firma", plaka: "Plaka", ad_soyad: "Ad Soyad" };
 
 const state = {
   receipts: [],
@@ -115,6 +116,7 @@ function renderReceipt() {
     form.elements[field].dataset.original = receipt[field] ?? "";
     form.elements[field].classList.remove("changed");
   });
+  renderExcelSuggestions(receipt);
 
   const badge = $("#statusBadge");
   badge.className = "status-badge";
@@ -138,6 +140,43 @@ function renderReceipt() {
   $("#durationMeta").textContent = receipt._sure_sn != null ? `OCR süresi: ${receipt._sure_sn} sn` : "";
   $("#changeMeta").textContent = receipt._duzeltildi ? "Elle düzeltildi" : receipt._onaylandi ? "Değişiklik yapılmadı" : "";
   $("#approveButton").innerHTML = receipt._onaylandi ? "<span>✓</span> Onayı güncelle" : "<span>✓</span> Doğru, onayla";
+}
+
+function renderExcelSuggestions(receipt) {
+  const box = $("#excelSuggestions");
+  const list = $("#suggestionList");
+  const data = receipt._excel_onerileri;
+  const suggestions = data?.oneriler || [];
+  box.classList.toggle("hidden", !suggestions.length);
+  list.innerHTML = "";
+  if (!suggestions.length) return;
+
+  $("#suggestionSource").textContent = `${data.kaynak || "Excel"} · ${data.sayfa || ""}`;
+  suggestions.forEach((suggestion) => {
+    const row = document.createElement("div");
+    row.className = "suggestion-item";
+    const copy = document.createElement("div");
+    copy.className = "suggestion-copy";
+    copy.innerHTML = `
+      <b>${escapeHtml(FIELD_LABELS[suggestion.alan] || suggestion.alan)} · %${escapeHtml(suggestion.benzerlik)}</b>
+      <span>${escapeHtml(suggestion.mevcut)} → <em>${escapeHtml(suggestion.onerilen)}</em></span>`;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "suggestion-apply";
+    button.textContent = "Uygula";
+    button.addEventListener("click", () => {
+      const input = form.elements[suggestion.alan];
+      if (!input) return;
+      input.value = suggestion.onerilen;
+      input.classList.toggle("changed", input.value !== input.dataset.original);
+      row.remove();
+      if (!list.children.length) box.classList.add("hidden");
+      input.focus();
+      toast(`${FIELD_LABELS[suggestion.alan] || suggestion.alan} önerisi uygulandı`);
+    });
+    row.append(copy, button);
+    list.appendChild(row);
+  });
 }
 
 function currentReceipt() {
@@ -169,7 +208,9 @@ async function saveCurrent(approved, goNext = false) {
     if (!response.ok) throw new Error(data.error || "Kayıt başarısız");
     const index = state.receipts.findIndex((r) => r._dosya === receipt._dosya);
     state.receipts[index] = data.receipt;
-    toast(approved ? "Fiş onaylandı" : "Değişiklikler kaydedildi");
+    const learned = Number(data.ogrenilen || 0);
+    const message = approved ? "Fiş onaylandı" : "Değişiklikler kaydedildi";
+    toast(learned ? `${message} · ${learned} düzeltme öğrenildi` : message);
     if (goNext) selectNextPending(index);
     else renderAll();
   } catch (error) {
@@ -231,12 +272,46 @@ async function openExcelModal() {
     });
 
     const previous = (data.son_ayar || {}).dosya;
+    const learning = data.ogrenme || {};
+    $("#learningStatus").textContent = learning.hazir
+      ? `Etkin referans: ${learning.kaynak_sayisi || 1} sayfa · ${learning.satir_sayisi} satır · ${learning.kullanici_duzeltme_sayisi || 0} kullanıcı düzeltmesi`
+      : "Henüz bir öneri referansı oluşturulmadı";
     if (previous && (data.dosyalar || []).some((f) => f.yol === previous)) {
       select.value = previous;
       await loadExcelSheets((data.son_ayar || {}).sayfa);
     }
   } catch (error) {
     excelError(error.message);
+  }
+}
+
+async function learnFromExcel() {
+  const dosya = $("#excelFile").value;
+  const sayfa = $("#excelSheet").value;
+  if (!dosya || !sayfa) {
+    excelError("Önce Excel dosyası ve sayfa seçilmeli.");
+    return;
+  }
+  const button = $("#excelLearn");
+  setBusy(button, true);
+  excelError("");
+  try {
+    const response = await fetch("/api/excel/learn", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dosya, sayfa }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Excel öğrenilemedi");
+    const learning = data.durum || {};
+    $("#learningStatus").textContent =
+      `Etkin referans: ${learning.kaynak_sayisi || 1} sayfa · ${learning.satir_sayisi} satır · ${learning.kullanici_duzeltme_sayisi || 0} kullanıcı düzeltmesi`;
+    await loadReceipts();
+    toast(data.mesaj || "Excel geçmişi öğrenildi");
+  } catch (error) {
+    excelError(error.message);
+  } finally {
+    setBusy(button, false);
   }
 }
 
@@ -427,12 +502,19 @@ form.elements.firma.addEventListener("blur", (event) => {
     event.target.classList.toggle("changed", event.target.value !== event.target.dataset.original);
   }
 });
+form.elements.km.addEventListener("blur", (event) => {
+  if (/^\d$/.test(event.target.value.trim())) {
+    event.target.value = "-";
+    event.target.classList.toggle("changed", event.target.value !== event.target.dataset.original);
+  }
+});
 $("#approveButton").addEventListener("click", () => saveCurrent(true, true));
 $("#deleteButton").addEventListener("click", deleteCurrent);
 $("#exportButton").addEventListener("click", openExcelModal);
 $("#excelFile").addEventListener("change", () => loadExcelSheets());
 $("#excelSheet").addEventListener("change", loadExcelPreview);
 $("#excelConfirm").addEventListener("click", confirmExcelExport);
+$("#excelLearn").addEventListener("click", learnFromExcel);
 $("#excelClose").addEventListener("click", () => $("#excelModal").classList.add("hidden"));
 $("#excelCancel").addEventListener("click", () => $("#excelModal").classList.add("hidden"));
 $("#excelModal").addEventListener("click", (event) => {

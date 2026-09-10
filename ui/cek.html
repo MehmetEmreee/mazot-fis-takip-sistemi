@@ -40,6 +40,7 @@
       .upload-list { display: flex; flex-direction: column; gap: 8px; }
       .upload-card { display: grid; grid-template-columns: 54px 1fr auto; gap: 11px; padding: 10px; border: 1px solid var(--line); border-radius: 13px; background: var(--paper); align-items: center; }
       .upload-thumb { width: 54px; height: 54px; border-radius: 9px; object-fit: cover; background: #e9eeeb; }
+      .upload-thumb.no-preview { display: grid; place-items: center; color: #75827b; font-size: 22px; }
       .upload-info { min-width: 0; }
       .upload-info strong, .upload-info span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .upload-info strong { font-size: 12px; }
@@ -138,12 +139,16 @@
         const card = document.createElement("article");
         card.className = "upload-card";
         card.innerHTML = `
-          <img class="upload-thumb" alt="Seçilen fiş önizlemesi" />
+          ${job.previewUrl
+            ? '<img class="upload-thumb" alt="Seçilen fiş önizlemesi" />'
+            : '<div class="upload-thumb no-preview" aria-hidden="true">▧</div>'}
           <div class="upload-info"><strong>${escapeHtml(job.file.name)}</strong><span>Yükleme sırasında</span></div>
           <button class="upload-status uploading" type="button" disabled>Bekliyor</button>`;
         const image = card.querySelector("img");
-        image.src = job.previewUrl;
-        image.addEventListener("load", () => URL.revokeObjectURL(job.previewUrl), { once: true });
+        if (image) {
+          image.src = job.previewUrl;
+          image.addEventListener("load", () => URL.revokeObjectURL(job.previewUrl), { once: true });
+        }
         card.querySelector(".upload-status").addEventListener("click", () => retry(job.id));
         uploadList.prepend(card);
         job.card = card;
@@ -162,15 +167,19 @@
 
       function addFiles(fileList) {
         const files = [...fileList].filter((file) => file.type.startsWith("image/"));
+        // Çok büyük seçimlerde yüzlerce tam çözünürlüklü önizleme telefon
+        // belleğini doldurabilir. Dosyalar yine eksiksiz yüklenir; yalnızca
+        // küçük resimler yerine hafif bir simge gösterilir.
+        const showPreviews = files.length <= 40;
         files.forEach((file) => {
           const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-          const job = { id, file, previewUrl: URL.createObjectURL(file), state: "uploading", filename: null, card: null };
+          const job = { id, file, previewUrl: showPreviews ? URL.createObjectURL(file) : null, state: "uploading", filename: null, card: null };
           jobs.set(id, job);
           createCard(job);
           uploadQueue.push(job);
+          pumpUploads();
         });
         updateCounts();
-        pumpUploads();
         if (files.length > 1) toast(`${files.length} fotoğraf kuyruğa eklendi`);
       }
 

@@ -23,6 +23,7 @@ ayrı bir süreçte, elle işleniyor.
 import json
 import re
 import sys
+from copy import copy
 from datetime import datetime
 from pathlib import Path
 
@@ -215,10 +216,10 @@ def sayiya_cevir(deger):
 
 
 def hucre_stilini_kopyala(kaynak_hucre, hedef_hucre) -> None:
-    hedef_hucre.font = kaynak_hucre.font.copy()
-    hedef_hucre.fill = kaynak_hucre.fill.copy()
-    hedef_hucre.border = kaynak_hucre.border.copy()
-    hedef_hucre.alignment = kaynak_hucre.alignment.copy()
+    hedef_hucre.font = copy(kaynak_hucre.font)
+    hedef_hucre.fill = copy(kaynak_hucre.fill)
+    hedef_hucre.border = copy(kaynak_hucre.border)
+    hedef_hucre.alignment = copy(kaynak_hucre.alignment)
     hedef_hucre.number_format = kaynak_hucre.number_format
 
 

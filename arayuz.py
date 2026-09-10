@@ -31,6 +31,7 @@ from extract_json import resmi_oku  # noqa: E402
 from dogrulama import kaydi_dogrula  # noqa: E402
 from normalizasyon import fis_normalize_et  # noqa: E402
 import excel_aktar  # noqa: E402
+import excel_ogrenme  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
 UI_DIR = ROOT / "ui"
@@ -286,6 +287,8 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
             try:
                 with DATA_LOCK:
                     receipts = [r for r in load_receipts() if not r.get("_silindi")]
+                    for receipt in receipts:
+                        receipt["_excel_onerileri"] = excel_ogrenme.kayit_onerileri(receipt)
                     modified = (
                         datetime.fromtimestamp(DATA_FILE.stat().st_mtime).isoformat()
                         if DATA_FILE.exists()
@@ -320,6 +323,7 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
                     "dosyalar": excel_aktar.excel_dosyalarini_bul(),
                     "son_ayar": excel_aktar.son_ayar(),
                     "bekleyen": len(excel_aktar.bekleyen_kayitlar()),
+                    "ogrenme": excel_ogrenme.durum(),
                 })
             except Exception as exc:
                 self.send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -372,6 +376,8 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
             self.handle_export_excel()
         elif path == "/api/excel/upload":
             self.handle_excel_upload()
+        elif path == "/api/excel/learn":
+            self.handle_excel_learn()
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -391,12 +397,14 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
                     raise LookupError(f"Kayıt bulunamadı: {filename}")
 
                 changed = False
+                changed_fields: set[str] = set()
                 for field in EDITABLE_FIELDS:
                     if field in fields:
                         value = fields[field]
                         value = "-" if value in (None, "") else str(value).strip()
                         if receipt.get(field) != value:
                             changed = True
+                            changed_fields.add(field)
                         receipt[field] = value
 
                 kaydi_dogrula(fis_normalize_et(receipt))
@@ -407,8 +415,14 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
                 if approved:
                     firma_klasorune_tasi(receipt)
                 save_receipts(receipts)
+                learned_count = excel_ogrenme.duzeltmelerden_ogren(
+                    receipt, changed_fields
+                )
 
-            self.send_json({"ok": True, "receipt": receipt})
+            receipt["_excel_onerileri"] = excel_ogrenme.kayit_onerileri(receipt)
+            self.send_json({
+                "ok": True, "receipt": receipt, "ogrenilen": learned_count,
+            })
         except LookupError as exc:
             self.send_json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
         except (ValueError, json.JSONDecodeError, OSError) as exc:
@@ -569,6 +583,31 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
         except ValueError as exc:
             self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except OSError as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def handle_excel_learn(self) -> None:
+        """Seçilen Excel sayfasını OCR düzeltme önerileri için referans yapar."""
+        try:
+            payload = self.read_json()
+            dosya = payload.get("dosya")
+            sayfa = payload.get("sayfa")
+            if not isinstance(dosya, str) or not isinstance(sayfa, str):
+                raise ValueError("Excel dosyası ve sayfa seçilmeli")
+            yol = Path(dosya)
+            if not excel_aktar.yol_guvenli_mi(yol):
+                raise ValueError("Bu dosyaya erişim izni yok")
+            sonuc = excel_ogrenme.referans_olustur(yol, sayfa)
+            self.send_json({
+                "ok": True,
+                "durum": excel_ogrenme.durum(),
+                "mesaj": (
+                    f"{sonuc['satir_sayisi']} satır öğrenildi · "
+                    f"toplam {sonuc['toplam_kaynak']} sayfa"
+                ),
+            })
+        except (ValueError, json.JSONDecodeError, OSError) as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        except Exception as exc:
             self.send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
 

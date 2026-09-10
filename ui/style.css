@@ -120,6 +120,19 @@ button { color: inherit; }
 .warning > span { flex: 0 0 23px; height: 23px; display: grid; place-items: center; border-radius: 50%; color: white; background: #d88a25; font-weight: 900; }
 .warning strong { font-size: 12px; }
 .warning p { margin: 3px 0 0; font-size: 11px; line-height: 1.4; }
+.excel-suggestions { margin: 12px 18px 0; padding: 12px 13px; border: 1px solid #b9d7c8; border-radius: 11px; background: #f1f8f4; }
+.suggestion-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--green-dark); }
+.suggestion-head strong, .suggestion-head small { display: block; }
+.suggestion-head strong { font-size: 12px; }
+.suggestion-head small { margin-top: 2px; color: var(--muted); font-size: 9px; }
+#suggestionList { display: grid; gap: 8px; margin-top: 10px; }
+.suggestion-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; padding-top: 8px; border-top: 1px solid #d5e7dd; }
+.suggestion-copy { min-width: 0; font-size: 11px; }
+.suggestion-copy b { display: block; margin-bottom: 3px; color: var(--ink); }
+.suggestion-copy span { display: block; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.suggestion-copy em { color: var(--green-dark); font-style: normal; font-weight: 800; }
+.suggestion-apply { min-height: 32px; padding: 0 10px; border: 1px solid #9fc7b4; border-radius: 8px; color: var(--green-dark); background: white; cursor: pointer; font-size: 11px; font-weight: 800; }
+.suggestion-apply:hover { background: var(--green-soft); }
 #receiptForm { padding: 18px; }
 .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .field.full { grid-column: 1 / -1; }
@@ -151,6 +164,8 @@ button { color: inherit; }
 .preview-details summary { cursor: pointer; color: var(--green-dark); font-size: 11px; font-weight: 700; }
 .preview-details div { margin-top: 8px; display: grid; gap: 4px; font-size: 11px; color: var(--muted); }
 .preview-details code { color: var(--ink); font: 11px ui-monospace, monospace; }
+.learn-button { width: 100%; color: var(--green-dark); border-color: #9fc7b4; background: var(--green-soft); }
+.learning-status { color: var(--muted); text-align: center; font-size: 10px; }
 .modal-error { margin: 0; padding: 10px 12px; border-radius: 9px; color: #8a3328; background: #fde4de; font-size: 12px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--line); background: #fbfcfb; }
 .shortcut { margin: 10px 0 0; color: var(--muted); text-align: center; font-size: 10px; }
