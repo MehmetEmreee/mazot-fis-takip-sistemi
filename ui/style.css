@@ -88,6 +88,7 @@ button { color: inherit; }
 .item-status { width: 9px; height: 9px; border-radius: 50%; background: #bdc6c1; }
 .item-status.suspicious { background: #e19a35; box-shadow: 0 0 0 3px var(--amber-soft); }
 .item-status.processing { background: #5790c9; box-shadow: 0 0 0 3px #e5f0fa; }
+.item-status.duplicate { background: #8a58b5; box-shadow: 0 0 0 3px #f3e8ff; }
 .item-status.approved { background: #2a936b; box-shadow: 0 0 0 3px var(--green-soft); }
 .data-time { min-height: 30px; padding: 8px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 10px; }
 
@@ -114,6 +115,7 @@ button { color: inherit; }
 .status-badge { padding: 6px 10px; border-radius: 99px; color: var(--muted); background: #eef1ef; font-size: 11px; font-weight: 800; }
 .status-badge.approved { color: var(--green-dark); background: var(--green-soft); }
 .status-badge.suspicious { color: var(--amber); background: var(--amber-soft); }
+.status-badge.duplicate { color: #70429a; background: #f3e8ff; }
 .warning { display: flex; gap: 12px; margin: 16px 18px 0; padding: 12px 13px; border: 1px solid #f0d8ae; border-radius: 11px; color: #724612; background: var(--amber-soft); }
 .warning > span { flex: 0 0 23px; height: 23px; display: grid; place-items: center; border-radius: 50%; color: white; background: #d88a25; font-weight: 900; }
 .warning strong { font-size: 12px; }
@@ -127,7 +129,9 @@ button { color: inherit; }
 .field input:focus { border-color: #5e9e82; box-shadow: 0 0 0 3px var(--green-soft); background: #fff; }
 .field input.changed { border-color: #d5a455; background: #fffaf0; }
 .meta-row { min-height: 35px; display: flex; justify-content: space-between; gap: 12px; padding-top: 14px; color: var(--muted); font-size: 10px; }
-.actions { display: grid; grid-template-columns: 1fr 1.35fr; gap: 10px; padding-top: 8px; }
+.actions { display: grid; grid-template-columns: auto 1fr 1.35fr; gap: 10px; padding-top: 8px; }
+.button.danger { padding: 0 14px; background: #fde4de; border-color: #f2b7a8; color: #8a3328; }
+.button.danger:hover { background: #fbd1c7; }
 .shortcut { margin: 10px 0 0; color: var(--muted); text-align: center; font-size: 10px; }
 kbd { padding: 1px 4px; border: 1px solid #ccd3ce; border-bottom-width: 2px; border-radius: 4px; background: #f7f8f7; font: 10px ui-monospace, monospace; }
 .empty-state { height: 100%; display: grid; align-content: center; justify-items: center; color: var(--muted); text-align: center; }

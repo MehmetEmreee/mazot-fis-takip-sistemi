@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
+from dogrulama import kaydi_dogrula
 from normalizasyon import fis_normalize_et
 
 SUTUNLAR = [
@@ -53,7 +54,7 @@ def main():
 
     supheli_sayisi = 0
     for veri in sonuclar:
-        veri = fis_normalize_et(veri)
+        veri = kaydi_dogrula(fis_normalize_et(veri))
         satir = [excel_degeri(veri.get(anahtar)) for anahtar, _ in SUTUNLAR]
         ws.append(satir)
         if veri.get("_kontrol_gerekli"):

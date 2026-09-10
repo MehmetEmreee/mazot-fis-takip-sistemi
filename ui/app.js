@@ -79,7 +79,7 @@ function renderList() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `receipt-item ${receipt._dosya === state.selectedFilename ? "active" : ""}`;
-    const statusClass = receipt._onaylandi ? "approved" : receipt._isleniyor ? "processing" : receipt._kontrol_gerekli ? "suspicious" : "";
+    const statusClass = receipt._onaylandi ? "approved" : receipt._tekrar ? "duplicate" : receipt._isleniyor ? "processing" : receipt._kontrol_gerekli ? "suspicious" : "";
     button.innerHTML = `
       <span class="item-index">${actualIndex}</span>
       <span class="item-copy">
@@ -121,6 +121,9 @@ function renderReceipt() {
   if (receipt._onaylandi) {
     badge.textContent = "✓ Onaylandı";
     badge.classList.add("approved");
+  } else if (receipt._tekrar) {
+    badge.textContent = "Tekrar fiş";
+    badge.classList.add("duplicate");
   } else if (receipt._isleniyor) {
     badge.textContent = "OCR işleniyor";
   } else if (receipt._kontrol_gerekli) {
@@ -169,6 +172,49 @@ async function saveCurrent(approved, goNext = false) {
     toast(approved ? "Fiş onaylandı" : "Değişiklikler kaydedildi");
     if (goNext) selectNextPending(index);
     else renderAll();
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function deleteCurrent() {
+  const receipt = currentReceipt();
+  if (!receipt) return;
+  if (!confirm(`"${receipt._dosya}" silinsin mi? (silinenler/ klasörüne taşınır, kalıcı silinmez)`)) return;
+
+  const button = $("#deleteButton");
+  setBusy(button, true);
+  try {
+    const response = await fetch("/api/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: receipt._dosya }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Silme başarısız");
+    const index = state.receipts.findIndex((r) => r._dosya === receipt._dosya);
+    state.receipts.splice(index, 1);
+    toast("Fiş silindi");
+    state.selectedFilename = (state.receipts[index] || state.receipts[index - 1] || {})._dosya || null;
+    renderAll();
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function exportToExcel() {
+  const button = $("#exportButton");
+  setBusy(button, true);
+  try {
+    const response = await fetch("/api/export-excel", { method: "POST" });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Aktarım başarısız");
+    toast(data.aktarilan > 0 ? `${data.aktarilan} fiş Excel'e aktarıldı` : "Aktarılacak yeni onaylı fiş yok");
+    if (data.aktarilan > 0) loadReceipts();
   } catch (error) {
     toast(error.message, true);
   } finally {
@@ -238,6 +284,8 @@ form.addEventListener("input", (event) => {
   if (event.target.name) event.target.classList.toggle("changed", event.target.value !== event.target.dataset.original);
 });
 $("#approveButton").addEventListener("click", () => saveCurrent(true, true));
+$("#deleteButton").addEventListener("click", deleteCurrent);
+$("#exportButton").addEventListener("click", exportToExcel);
 document.addEventListener("keydown", (event) => {
   if (event.ctrlKey && event.key === "Enter") { event.preventDefault(); saveCurrent(true, true); }
 });

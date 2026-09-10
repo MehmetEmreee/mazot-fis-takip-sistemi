@@ -213,6 +213,84 @@ KULLANIM (300 fiş için, yarın):
   yukarıdaki değişikliklerle birlikte test edildi, sorunsuz çalışıyor.
 
 
+3f) GERÇEK DEFTERE AKTARIM: excel_aktar.py
+------------------------------------------
+- Kaynak defter: C:\Users\mehme\Documents\NUSRET MAZOT 2026_YENİ 2.xlsx
+  Bir kopyası output\NUSRET MAZOT 2026_YENİ 2.xlsx olarak oluşturuldu —
+  yazma işlemleri hep bu kopyaya yapılıyor, orijinal dosyaya DOKUNULMUYOR.
+- Hedef sayfa: "YİLMAZ MAZOT 2026". Gerçek geçmiş veriye bakılarak sütun
+  eşleştirmesi doğrulandı:
+    A TARİH · B FATURA NO(fis_no) · C FİRMA · D ARAÇ PLAKASI(plaka,
+    gerçek plaka veya ekipman adı) · E ADI SOYADI(ad_soyad) ·
+    F ARAÇ KM(km) · H ALINAN LİTRE(litre)
+  G, I, J, K, L, M (bakiye/fatura formülleri) BOŞ bırakılıyor — bu
+  sütunlar deftede ayrı bir süreçte elle dolduruluyor, tekil fiş
+  satırlarında zaten hep boş.
+- ÖNEMLİ KEŞİF: Defterde "ŞEN KASAP" ve "HASAN ZEMİN" zaten FİRMA
+  sütununda gerçek, tekrarlayan değerler. "Hasan Zemin" birden fazla
+  farklı firma altında (Hasaltun, Mega Varlık, kendi hesabı) "kazık
+  makinesi/ankraj" operatörü olarak geçen GERÇEK BİR KİŞİ. Bu yüzden
+  fis2.jpeg'teki "Hasan Zemin - Veli Tekep" (iki ismi tire ile birleştirme)
+  YANLIŞ bir varsayımdı — defterde böyle bir gelenek yok, hep TEK kişi
+  yazılıyor. fis2.jpeg onaylanmadan önce arayüzden ADI SOYADI alanı
+  "HASAN ZEMİN" olarak düzeltilmeli (Veli Tebep/Tekep muhtemelen yanlış
+  okundu ya da farklı bir amaçla yazıldı — netlik yok, kontrol gerekiyor).
+- KURAL (kullanıcı onayladı): "Sayın:" alanı gerçekten boşsa (şirketin
+  kendi aracı/ekipmanı), FİRMA sütununa otomatik "SELİM İNŞAAT" yazılıyor
+  — bu kural normalizasyon.py'a eklendi (firmayi_duzelt fonksiyonu),
+  yani arayüzde de, Excel'e aktarımda da tutarlı uygulanıyor.
+- BOŞLUK KURALI: İlk çalıştırmada eski (elle girilmiş, satır 3933'te
+  biten) veri ile yeni (OCR) veri arasına bir boşluk satırı bırakılıyor.
+  Sonraki çalıştırmalar kaldığı yerden, EK boşluk bırakmadan devam ediyor
+  (output\.aktarim_durumu.json dosyasında son yazılan satır takip
+  ediliyor). Hücre biçimi (font, hizalama, sayı formatı) bir önceki
+  satırdan birebir kopyalanıyor.
+- TEKRAR ÇALIŞTIRMA GÜVENLİ: Sadece _onaylandi=true VE daha önce
+  _excel_aktarildi=true OLMAYAN kayıtlar aktarılıyor — script'i kaç kez
+  çalıştırırsan çalıştır, aynı fiş ikinci kez eklenmiyor.
+- TEST: Gerçek veriye hiç dokunmadan, ayrı bir geçici kopya üzerinde 3
+  senaryo test edildi (ilk aktarım+boşluk, tekrar çalıştırma+aktarılacak
+  yok, üçüncü kayıt+boşluksuz devam) — hepsi doğru çalıştı.
+- ŞU AN HİÇBİR FİŞ ONAYLANMAMIŞ DURUMDA (hepsi _onaylandi=None) — yani
+  excel_aktar.py çalıştırıldığında henüz aktarılacak bir şey yok. Önce
+  arayüzden (http://127.0.0.1:8765) fişler gözden geçirilip onaylanmalı.
+- ÇALIŞTIRMA: .\.venv\Scripts\python.exe excel_aktar.py
+
+
+3g) SİLME BUTONU + FİRMA KLASÖRLEME + EXCEL BUTONU
+------------------------------------------------------
+- fisler/ artık üç bölümlü: fisler/temp/ (yüklenen ama henüz onaylanmamış
+  fişler), fisler/<FİRMA ADI>/ (onaylanınca otomatik taşınıyor),
+  fisler/silinenler/ (silinen fişler — kalıcı silinmiyor, buraya taşınıyor).
+- KLASÖRLEME NE ZAMAN OLUYOR (kullanıcı onayladı): OCR bitince DEĞİL,
+  kullanıcı arayüzden ONAYLADIĞI anda (firma adını gerekirse düzelttikten
+  sonra). Sebep: OCR'ın okuduğu firma adı bazen hatalı (SEN KALAP/ŞEN
+  KASAP gibi) — OCR anında taşırsak yazım hatası başına ayrı, yanlış
+  klasör oluşurdu. Firma sonradan düzeltilip yeniden onaylanırsa dosya
+  doğru klasöre otomatik taşınır (firma_klasorune_tasi() fonksiyonu).
+- SİLME BUTONU (kullanıcı onayladı: kalıcı değil, geri alınabilir):
+  Fiş kartındaki 🗑 butonu, onay istedikten sonra dosyayı
+  fisler/silinenler/'e taşır, kaydı sonuclar.json'da _silindi=true olarak
+  işaretler (kayıt SİLİNMEZ, sadece listede gizlenir — /api/receipts
+  _silindi=true olanları döndürmüyor). Geri almak için (şu an arayüzden
+  buton yok, elle yapılır): dosyayı silinenler/'den geri taşı,
+  sonuclar.json'da o kaydın _silindi alanını false yap.
+- EXCEL'E AKTAR BUTONU: Üst çubukta "📊 Excel'e Aktar" butonu artık
+  excel_aktar.py'ı ayrıca çalıştırmaya gerek bırakmıyor — /api/export-excel
+  ucu excel_aktar.py'daki aktar() fonksiyonunu doğrudan çağırıyor (kod
+  TEK yerde, CLI ve arayüz aynı mantığı kullanıyor). Kaç fiş eklendiği
+  toast olarak gösteriliyor.
+- TEST: Sahte bir test kaydıyla (gerçek 4 fişe dokunmadan) üçü de uçtan
+  uca test edildi — onaylayınca doğru klasöre taşındı, Excel'e aktarıldı
+  (doğru satıra, doğru boşluk kuralıyla), silme silinenler/'e taşıdı ve
+  listeden kayboldu. Test sonrası tüm izler temizlendi (test kaydı,
+  test klasörü, Excel'deki test satırı, aktarım durum dosyası sıfırlandı).
+- NOT: Kullanıcı eş zamanlı olarak fotoğraf tekrarı (duplicate) tespiti
+  üzerinde çalışıyor gibi görünüyor (hashlib, IMAGE_HASHES, _tekrar alanı
+  eklendi ama henüz tam bağlanmamış) — bu benim işim değil, kullanıcının
+  kendi geliştirmesi, dokunmadım.
+
+
 4) AÇIK NOKTALAR / YARIN KONUŞULACAKLAR
 -------------------------------------------
 - Sabit bir araç filosu (bilinen plaka listesi) yok — bu yüzden plaka

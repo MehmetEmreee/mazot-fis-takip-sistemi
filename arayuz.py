@@ -8,6 +8,7 @@ Arayüz varsayılan olarak http://127.0.0.1:8765 adresinde açılır.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import mimetypes
 import os
@@ -16,6 +17,7 @@ import re
 import socket
 import sys
 import threading
+import time
 import uuid
 import webbrowser
 from datetime import datetime
@@ -26,7 +28,9 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from extract_json import resmi_oku  # noqa: E402
+from dogrulama import kaydi_dogrula  # noqa: E402
 from normalizasyon import fis_normalize_et  # noqa: E402
+import excel_aktar  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
 UI_DIR = ROOT / "ui"
@@ -36,7 +40,8 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 EDITABLE_FIELDS = ("fis_no", "tarih", "firma", "plaka", "ad_soyad", "km", "litre")
 MAX_UPLOAD_BYTES = 30 * 1024 * 1024  # 30MB güvenlik sınırı
 DATA_LOCK = threading.Lock()
-OCR_QUEUE: queue.Queue[Path] = queue.Queue()
+OCR_QUEUE: queue.Queue[tuple[Path, str]] = queue.Queue()
+IMAGE_HASHES: dict[str, str] = {}
 
 
 def lan_ip() -> str:
@@ -62,16 +67,71 @@ def load_receipts() -> list[dict]:
         raise ValueError(f"sonuclar.json okunamadı: {exc}") from exc
     if not isinstance(data, list):
         raise ValueError("sonuclar.json bir liste içermeli")
-    return [fis_normalize_et(receipt) for receipt in data]
+    return [kaydi_dogrula(fis_normalize_et(receipt)) for receipt in data]
 
 
 def save_receipts(receipts: list[dict]) -> None:
-    receipts = [fis_normalize_et(receipt) for receipt in receipts]
-    temporary = DATA_FILE.with_suffix(".json.tmp")
+    receipts = [kaydi_dogrula(fis_normalize_et(receipt)) for receipt in receipts]
+    temporary = DATA_FILE.with_name(f".{DATA_FILE.name}.{uuid.uuid4().hex}.tmp")
     temporary.write_text(
         json.dumps(receipts, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    os.replace(temporary, DATA_FILE)
+    try:
+        for attempt in range(6):
+            try:
+                os.replace(temporary, DATA_FILE)
+                return
+            except PermissionError:
+                if attempt == 5:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+    finally:
+        if temporary.exists():
+            temporary.unlink(missing_ok=True)
+
+
+def temp_dir() -> Path:
+    """Yeni yüklenen, henüz onaylanmamış fişlerin geçici olarak durduğu
+    klasör. FISLER_DIR --fisler-dir ile değişebildiği için sabit bir
+    değişken yerine her seferinde hesaplanır."""
+    d = FISLER_DIR / "temp"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def silinenler_dir() -> Path:
+    d = FISLER_DIR / "silinenler"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def firma_klasor_adi(firma) -> str:
+    """Firma adını Windows'ta geçerli bir klasör adına çevirir."""
+    metin = str(firma or "").strip() or "DİĞER"
+    metin = re.sub(r'[<>:"/\\|?*]', "", metin)
+    metin = re.sub(r"\s+", " ", metin).strip(" .")
+    return metin or "DİĞER"
+
+
+def firma_klasorune_tasi(receipt: dict) -> None:
+    """Onaylanan bir fişi, güncel firma adına göre fisler/<firma>/ altına
+    taşır. Fiş zaten doğru klasördeyse bir şey yapmaz; firma sonradan
+    düzeltilip yeniden onaylanırsa doğru klasöre yeniden taşır."""
+    dosya = receipt.get("_dosya")
+    mevcut = find_image(dosya) if dosya else None
+    if not mevcut:
+        return
+
+    hedef_klasor = FISLER_DIR / firma_klasor_adi(receipt.get("firma"))
+    hedef_klasor.mkdir(parents=True, exist_ok=True)
+    hedef = hedef_klasor / mevcut.name
+
+    if mevcut.resolve() == hedef.resolve():
+        return
+    if hedef.exists():
+        hedef = benzersiz_hedef(hedef_klasor, mevcut.stem, mevcut.suffix.lower())
+        receipt["_dosya"] = hedef.name
+    mevcut.rename(hedef)
 
 
 def guvenli_fis_no(fis_no) -> str | None:
@@ -95,10 +155,32 @@ def benzersiz_hedef(klasor: Path, taban: str, ext: str) -> Path:
     return aday
 
 
+def dosya_hashi(path: Path) -> str:
+    ozet = hashlib.sha256()
+    with path.open("rb") as file:
+        for parca in iter(lambda: file.read(1024 * 1024), b""):
+            ozet.update(parca)
+    return ozet.hexdigest()
+
+
+def hash_indeksini_hazirla() -> None:
+    """Mevcut fişleri bir kez tarayıp özdeş fotoğraf indeksini oluşturur."""
+    IMAGE_HASHES.clear()
+    for path in FISLER_DIR.rglob("*"):
+        if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
+            # Geri dönüşüm klasöründeki silinmiş fişler yeni yüklemeyi engellemesin.
+            if "silinenler" in {part.lower() for part in path.parts}:
+                continue
+            try:
+                IMAGE_HASHES.setdefault(dosya_hashi(path), path.name)
+            except OSError:
+                continue
+
+
 def ocr_worker() -> None:
     """Yüklenen görselleri arka planda, GPU'yu yormadan tek tek işler."""
     while True:
-        image_path = OCR_QUEUE.get()
+        image_path, image_hash = OCR_QUEUE.get()
         original_name = image_path.name
         try:
             try:
@@ -111,13 +193,13 @@ def ocr_worker() -> None:
                     "_kontrol_nedeni": "işleme hatası",
                 })
 
-            # OCR başarılıysa Claude'un eklediği fiş-no ile adlandırma kuralını koru.
+            # OCR başarılıysa fiş no ile adlandırma kuralını koru (hâlâ temp/'te).
             if not record.get("HATA"):
                 fis_no = guvenli_fis_no(record.get("fis_no"))
                 if fis_no:
                     try:
                         yeni_hedef = benzersiz_hedef(
-                            FISLER_DIR, fis_no, image_path.suffix.lower()
+                            temp_dir(), fis_no, image_path.suffix.lower()
                         )
                         image_path.rename(yeni_hedef)
                         image_path = yeni_hedef
@@ -126,6 +208,7 @@ def ocr_worker() -> None:
                         record["_dosya"] = original_name
 
             record["_isleniyor"] = False
+            record["_dosya_hash"] = image_hash
             with DATA_LOCK:
                 receipts = load_receipts()
                 index = next(
@@ -135,9 +218,27 @@ def ocr_worker() -> None:
                 )
                 if index is None:
                     receipts.append(record)
+                    index = len(receipts) - 1
                 else:
                     record["_yukleme_zamani"] = receipts[index].get("_yukleme_zamani")
+                    record["_yukleme_id"] = receipts[index].get("_yukleme_id")
                     receipts[index] = record
+
+                IMAGE_HASHES[image_hash] = record.get("_dosya", original_name)
+                fis_no = str(record.get("fis_no") or "").strip()
+                if re.fullmatch(r"\d{6}", fis_no):
+                    diger = next(
+                        (item for i, item in enumerate(receipts)
+                         if i != index and not item.get("_isleniyor")
+                         and not item.get("_silindi")
+                         and str(item.get("fis_no") or "").strip() == fis_no),
+                        None,
+                    )
+                    if diger:
+                        record["_tekrar"] = True
+                        record["_tekrar_nedeni"] = (
+                            f"Aynı fiş no daha önce yüklendi: {diger.get('_dosya', '-')}"
+                        )
                 save_receipts(receipts)
         finally:
             OCR_QUEUE.task_done()
@@ -183,12 +284,13 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
 
         if parsed.path == "/api/receipts":
             try:
-                receipts = load_receipts()
-                modified = (
-                    datetime.fromtimestamp(DATA_FILE.stat().st_mtime).isoformat()
-                    if DATA_FILE.exists()
-                    else None
-                )
+                with DATA_LOCK:
+                    receipts = [r for r in load_receipts() if not r.get("_silindi")]
+                    modified = (
+                        datetime.fromtimestamp(DATA_FILE.stat().st_mtime).isoformat()
+                        if DATA_FILE.exists()
+                        else None
+                    )
                 self.send_json({"receipts": receipts, "modified": modified})
             except ValueError as exc:
                 self.send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -225,6 +327,10 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
             self.handle_save()
         elif path == "/api/upload":
             self.handle_upload()
+        elif path == "/api/delete":
+            self.handle_delete()
+        elif path == "/api/export-excel":
+            self.handle_export_excel()
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -252,11 +358,13 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
                             changed = True
                         receipt[field] = value
 
-                fis_normalize_et(receipt)
+                kaydi_dogrula(fis_normalize_et(receipt))
 
                 receipt["_onaylandi"] = approved
                 receipt["_duzeltildi"] = bool(receipt.get("_duzeltildi")) or changed
                 receipt["_kontrol_zamani"] = datetime.now().isoformat(timespec="seconds")
+                if approved:
+                    firma_klasorune_tasi(receipt)
                 save_receipts(receipts)
 
             self.send_json({"ok": True, "receipt": receipt})
@@ -280,11 +388,32 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
             if ext in (".jpe", ".jfif"):
                 ext = ".jpg"
 
-            FISLER_DIR.mkdir(exist_ok=True)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-            filename = f"fis_{ts}_{uuid.uuid4().hex[:6]}{ext}"
-            dest = FISLER_DIR / filename
-            dest.write_bytes(data)
+            upload_id = uuid.uuid4().hex
+            filename = f"fis_{ts}_{upload_id[:6]}{ext}"
+            dest = temp_dir() / filename
+            image_hash = hashlib.sha256(data).hexdigest()
+            with DATA_LOCK:
+                onceki_dosya = IMAGE_HASHES.get(image_hash)
+                if onceki_dosya:
+                    self.send_json(
+                        {
+                            "error": "Bu fotoğraf daha önce yüklendi",
+                            "duplicate": True,
+                            "existing_filename": onceki_dosya,
+                        },
+                        HTTPStatus.CONFLICT,
+                    )
+                    return
+                # Eşzamanlı özdeş isteklerin ikisinin de kabul edilmesini önle.
+                IMAGE_HASHES[image_hash] = filename
+            try:
+                dest.write_bytes(data)
+            except OSError:
+                with DATA_LOCK:
+                    if IMAGE_HASHES.get(image_hash) == filename:
+                        IMAGE_HASHES.pop(image_hash, None)
+                raise
         except ValueError as exc:
             self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             return
@@ -295,6 +424,8 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
         record = fis_normalize_et({
             "_dosya": filename,
             "_isleniyor": True,
+            "_yukleme_id": upload_id,
+            "_dosya_hash": image_hash,
             "_yukleme_zamani": datetime.now().isoformat(timespec="seconds"),
             "_kontrol_gerekli": True,
             "_kontrol_nedeni": "OCR kuyruğunda",
@@ -304,7 +435,7 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
             receipts.append(record)
             save_receipts(receipts)
 
-        OCR_QUEUE.put(dest)
+        OCR_QUEUE.put((dest, image_hash))
         self.send_json(
             {
                 "ok": True,
@@ -314,6 +445,54 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
             },
             HTTPStatus.ACCEPTED,
         )
+
+    def handle_delete(self) -> None:
+        """Fişi kalıcı silmez — dosyayı fisler/silinenler/ klasörüne taşır
+        ve kaydı _silindi=true olarak işaretler. Geri almak istenirse dosya
+        elle silinenler/'den geri taşınıp _silindi false yapılabilir."""
+        try:
+            payload = self.read_json()
+            filename = payload.get("filename")
+            if not isinstance(filename, str) or not filename:
+                raise ValueError("Geçersiz dosya adı")
+
+            with DATA_LOCK:
+                receipts = load_receipts()
+                receipt = next((r for r in receipts if r.get("_dosya") == filename), None)
+                if receipt is None:
+                    raise LookupError(f"Kayıt bulunamadı: {filename}")
+
+                mevcut = find_image(filename)
+                if mevcut:
+                    hedef = silinenler_dir() / mevcut.name
+                    if hedef.exists():
+                        hedef = benzersiz_hedef(silinenler_dir(), mevcut.stem, mevcut.suffix.lower())
+                    mevcut.rename(hedef)
+
+                receipt["_silindi"] = True
+                receipt["_silinme_zamani"] = datetime.now().isoformat(timespec="seconds")
+                image_hash = receipt.get("_dosya_hash")
+                if image_hash and IMAGE_HASHES.get(image_hash) == filename:
+                    IMAGE_HASHES.pop(image_hash, None)
+                save_receipts(receipts)
+
+            self.send_json({"ok": True})
+        except LookupError as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        except (ValueError, json.JSONDecodeError, OSError) as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def handle_export_excel(self) -> None:
+        try:
+            with DATA_LOCK:
+                excel_aktar.DATA_FILE = DATA_FILE
+                sonuc = excel_aktar.aktar()
+            if "hata" in sonuc:
+                self.send_json({"error": sonuc["hata"]}, HTTPStatus.BAD_REQUEST)
+                return
+            self.send_json({"ok": True, **sonuc})
+        except Exception as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
 
 def main() -> None:
@@ -346,6 +525,7 @@ def main() -> None:
     DATA_FILE = args.data_file.resolve()
     FISLER_DIR = args.fisler_dir.resolve()
     FISLER_DIR.mkdir(exist_ok=True)
+    hash_indeksini_hazirla()
 
     if not UI_DIR.exists():
         raise SystemExit(f"Arayüz klasörü bulunamadı: {UI_DIR}")
@@ -361,7 +541,8 @@ def main() -> None:
             if receipt.get("_isleniyor"):
                 image_path = find_image(receipt.get("_dosya", ""))
                 if image_path:
-                    OCR_QUEUE.put(image_path)
+                    image_hash = receipt.get("_dosya_hash") or dosya_hashi(image_path)
+                    OCR_QUEUE.put((image_path, image_hash))
 
     print(f"Fiş kontrol arayüzü (bu bilgisayardan): {local_address}")
     if args.host != "127.0.0.1":

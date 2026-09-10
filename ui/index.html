@@ -27,6 +27,9 @@
         <a class="button subtle" href="/cek" title="Telefondan fiş fotoğrafı çek">
           <span aria-hidden="true">📷</span> Fiş Çek
         </a>
+        <button class="button subtle" id="exportButton" type="button" title="Onaylı fişleri Excel defterine aktar">
+          <span aria-hidden="true">📊</span> Excel'e Aktar
+        </button>
         <button class="button subtle" id="reloadButton" type="button" title="OCR sonuçlarını yeniden oku">
           <span aria-hidden="true">↻</span> Yenile
         </button>
@@ -108,6 +111,9 @@
               </div>
 
               <div class="actions">
+                <button class="button danger" id="deleteButton" type="button" title="Fişi sil (silinenler/ klasörüne taşınır)">
+                  <span aria-hidden="true">🗑</span>
+                </button>
                 <button class="button secondary" id="saveButton" type="submit">Değişiklikleri kaydet</button>
                 <button class="button primary" id="approveButton" type="button"><span>✓</span> Doğru, onayla</button>
               </div>

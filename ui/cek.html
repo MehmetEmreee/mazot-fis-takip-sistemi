@@ -48,6 +48,7 @@
       .upload-status.uploading, .upload-status.processing { background: var(--amber-soft); color: var(--amber); }
       .upload-status.ok { background: var(--green-soft); color: var(--green-dark); }
       .upload-status.suspicious { background: var(--amber-soft); color: var(--amber); }
+      .upload-status.duplicate { background: #f3e8ff; color: #70429a; }
       .upload-status.error { border: 0; background: #fde4de; color: #8a3328; cursor: pointer; }
       .empty-hint { margin: 0; padding: 30px 10px; border: 1px dashed #cfd7d2; border-radius: 13px; color: var(--muted); text-align: center; font-size: 12px; }
 
@@ -122,7 +123,7 @@
 
       function updateCounts() {
         const values = [...jobs.values()];
-        const done = values.filter((job) => job.state === "done").length;
+        const done = values.filter((job) => job.state === "done" || job.state === "duplicate").length;
         const failed = values.filter((job) => job.state === "error").length;
         const pending = values.length - done - failed;
         totalCount.textContent = values.length;
@@ -191,9 +192,19 @@
             body: job.file,
           });
           const data = await response.json();
+          if (response.status === 409 && data.duplicate) {
+            setCard(
+              job,
+              "duplicate",
+              "Tekrar fotoğraf",
+              `Daha önce yüklendi: ${data.existing_filename || "mevcut fiş"}`,
+              "Atlandı",
+            );
+            return;
+          }
           if (!response.ok) throw new Error(data.error || "Yükleme başarısız");
           job.filename = data.filename;
-          job.uploadTime = data.receipt && data.receipt._yukleme_zamani;
+          job.uploadId = data.receipt && data.receipt._yukleme_id;
           setCard(job, "processing", data.filename, `OCR kuyruğunda · sıra yaklaşık ${data.queue_size || 1}`, "OCR bekliyor");
           startPolling();
         } catch (error) {
@@ -218,6 +229,10 @@
         }
         const title = receipt.plaka !== "-" ? receipt.plaka : receipt.fis_no;
         const detail = [`No: ${receipt.fis_no}`, `${receipt.litre} L`].join(" · ");
+        if (receipt._tekrar) {
+          setCard(job, "duplicate", title, receipt._tekrar_nedeni || "Aynı fiş no daha önce yüklendi", "Tekrar fiş");
+          return;
+        }
         const stateClass = receipt._kontrol_gerekli ? "suspicious" : "ok";
         setCard(job, "done", title, detail, receipt._kontrol_gerekli ? "Kontrol gerekli" : "Tamam");
         job.card.querySelector(".upload-status").className = `upload-status ${stateClass}`;
@@ -231,7 +246,9 @@
           if (!response.ok) throw new Error("Sonuçlar alınamadı");
           const data = await response.json();
           waiting.forEach((job) => {
-            const receipt = data.receipts.find((item) => item._dosya === job.filename || item._yukleme_zamani === job.uploadTime);
+            const receipt = data.receipts.find((item) =>
+              (job.uploadId && item._yukleme_id === job.uploadId) || item._dosya === job.filename
+            );
             if (receipt) {
               if (receipt._dosya !== job.filename && !receipt._isleniyor) job.filename = receipt._dosya;
               renderReceipt(job, receipt);

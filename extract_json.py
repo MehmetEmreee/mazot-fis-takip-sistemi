@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 import requests
 from PIL import Image
+from dogrulama import kaydi_dogrula
 from normalizasyon import fis_normalize_et
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
@@ -146,25 +147,7 @@ def tarih_supheli_mi(tarih) -> bool:
 
 
 def dogrula(veri: dict) -> dict:
-    nedenler = []
-    if "HATA" in veri:
-        nedenler.append("okuma hatası")
-    else:
-        if veri.get("_ekipman_durumu"):
-            nedenler.append("ekipman fişi (isim/ekipman adı elle kontrol edilmeli)")
-        elif plaka_supheli_mi(veri.get("plaka")):
-            nedenler.append("plaka formatı şüpheli")
-        if tarih_supheli_mi(veri.get("tarih")):
-            nedenler.append("tarih formatı şüpheli")
-        if metin_supheli_mi(veri.get("firma")):
-            nedenler.append("firma alanı şüpheli (muhtemelen hallüsinasyon)")
-        for alan in ("fis_no", "plaka", "litre"):
-            if not veri.get(alan):
-                nedenler.append(f"'{alan}' boş/okunamadı")
-
-    veri["_kontrol_gerekli"] = bool(nedenler)
-    veri["_kontrol_nedeni"] = "; ".join(nedenler)
-    return veri
+    return kaydi_dogrula(fis_normalize_et(veri))
 
 
 def resmi_oku(image_path: Path) -> dict:
