@@ -291,6 +291,45 @@ KULLANIM (300 fiş için, yarın):
   kendi geliştirmesi, dokunmadım.
 
 
+3h) EXCEL AKTARIMI ARTIK ARAYÜZDEN SEÇİLİYOR
+-------------------------------------------------
+- ÖNCEKİ SORUN: Hedef dosya/sayfa koda gömülüydü (output/ içindeki KOPYA +
+  "YİLMAZ MAZOT 2026"). Kullanıcı butona basınca bir şey olmuyor gibi
+  görünüyordu; iki sebebi vardı: (1) hiçbir fiş onaylanmamıştı, o yüzden
+  "aktarilan: 0" dönüyordu, (2) yazılan dosya Documents'taki GERÇEK defter
+  değil, output/ içindeki kopyaydı — yani kullanıcı kendi dosyasını açınca
+  hiçbir değişiklik göremiyordu.
+- ÇÖZÜM: "📊 Excel'e Aktar" artık bir pencere açıyor:
+  * Excel dosyası seçimi (output/, proje kökü ve Belgeler klasöründeki
+    .xlsx/.xlsm dosyaları listeleniyor — Documents'taki gerçek defter de
+    listede). Listede yoksa "dosya yükle" ile tarayıcıdan yüklenebiliyor
+    (output/ klasörüne kaydediliyor).
+  * Sayfa seçimi (seçilen dosyanın sayfaları okunup listeleniyor).
+  * Önizleme: sayfadaki son dolu satır, eklenecek ilk satır (DEĞİŞTİRİLEBİLİR
+    sayı kutusu), aktarılacak onaylı fiş sayısı, ve sütun eşleştirmesi +
+    sayfanın gerçek başlıkları (yanlış sayfa seçilirse hemen belli olur).
+  * "Deftere ekle" → yazar, kaç satır eklendiğini bildirir.
+- Son kullanılan dosya/sayfa output/.excel_ayar.json'a yazılıyor, pencere
+  bir dahakine onu hazır seçili getiriyor.
+- BOŞLUK KURALI: Her aktarımda sayfadaki son dolu satır bulunur, BİR SATIR
+  boş bırakılır, kayıtlar oradan itibaren eklenir. Başka türlü istenirse
+  penceredeki "eklenecek ilk satır" kutusu elle değiştirilebilir.
+- SON DOLU SATIR TESPİTİ (önemli ince ayar): Bir satırın "gerçek işlem"
+  sayılması için A-F/H sütunlarında EN AZ İKİ dolu hücre gerekiyor. Sebep:
+  deftede 4767. satırda tek başına "SELİM İNŞAAT" etiketi, 4768'de
+  "ARA TOPLAM" var; tek hücre şartıyla yeni kayıtlar 4769'a, yani gerçek
+  verinin ~830 satır altına düşüyordu. İki hücre şartıyla doğru satır
+  (3933) bulunuyor, ekleme 3935'ten başlıyor.
+- GÜVENLİK: Tarayıcıdan gelen dosya yolu doğrulanıyor — sadece output/,
+  proje kökü ve Belgeler klasörü altındaki .xlsx/.xlsm dosyalarına
+  yazılabiliyor. Dosya Excel'de açıksa "kapatıp tekrar dene" uyarısı
+  veriliyor (veri kaybı olmuyor).
+- TEST: Tarayıcıda uçtan uca denendi — dosya seçimi, sayfa listesi,
+  önizleme (son satır 3933 / eklenecek 3935), gerçek aktarım (output/
+  kopyasına, sahte bir onaylı kayıtla), .xlsx yükleme ucu. Hepsi çalıştı,
+  test verileri ve ayar dosyaları sonrasında temizlendi.
+
+
 4) AÇIK NOKTALAR / YARIN KONUŞULACAKLAR
 -------------------------------------------
 - Sabit bir araç filosu (bilinen plaka listesi) yok — bu yüzden plaka

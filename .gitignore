@@ -10,6 +10,10 @@ sonuclar.json
 fisler.xlsx
 crops/
 
+# Gerçek muhasebe defteri kopyaları ve aktarım ayarları
+# (3900+ satır gerçek isim/plaka/tutar içeriyor — GitHub'a gitmemeli)
+output/
+
 # Test/teşhis kalıntıları
 ornek.jpg
 row_profile.png

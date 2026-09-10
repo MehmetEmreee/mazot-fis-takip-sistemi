@@ -206,17 +206,155 @@ async function deleteCurrent() {
   }
 }
 
-async function exportToExcel() {
-  const button = $("#exportButton");
-  setBusy(button, true);
+function excelError(message) {
+  const box = $("#excelError");
+  box.textContent = message || "";
+  box.classList.toggle("hidden", !message);
+}
+
+async function openExcelModal() {
+  $("#excelModal").classList.remove("hidden");
+  excelError("");
+  $("#excelPreview").classList.add("hidden");
   try {
-    const response = await fetch("/api/export-excel", { method: "POST" });
+    const response = await fetch("/api/excel/files", { cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Dosyalar listelenemedi");
+
+    const select = $("#excelFile");
+    select.innerHTML = '<option value="">— dosya seç —</option>';
+    (data.dosyalar || []).forEach((file) => {
+      const option = document.createElement("option");
+      option.value = file.yol;
+      option.textContent = `${file.ad}  (${file.klasor})`;
+      select.appendChild(option);
+    });
+
+    const previous = (data.son_ayar || {}).dosya;
+    if (previous && (data.dosyalar || []).some((f) => f.yol === previous)) {
+      select.value = previous;
+      await loadExcelSheets((data.son_ayar || {}).sayfa);
+    }
+  } catch (error) {
+    excelError(error.message);
+  }
+}
+
+async function loadExcelSheets(preferredSheet) {
+  const dosya = $("#excelFile").value;
+  const sheetSelect = $("#excelSheet");
+  sheetSelect.innerHTML = "";
+  $("#excelPreview").classList.add("hidden");
+  if (!dosya) return;
+
+  try {
+    const response = await fetch(`/api/excel/sheets?dosya=${encodeURIComponent(dosya)}`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Sayfalar okunamadı");
+
+    (data.sayfalar || []).forEach((name) => {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      sheetSelect.appendChild(option);
+    });
+    if (preferredSheet && (data.sayfalar || []).includes(preferredSheet)) {
+      sheetSelect.value = preferredSheet;
+    }
+    await loadExcelPreview();
+  } catch (error) {
+    excelError(error.message);
+  }
+}
+
+async function loadExcelPreview() {
+  const dosya = $("#excelFile").value;
+  const sayfa = $("#excelSheet").value;
+  if (!dosya || !sayfa) return;
+  excelError("");
+  try {
+    const response = await fetch(
+      `/api/excel/preview?dosya=${encodeURIComponent(dosya)}&sayfa=${encodeURIComponent(sayfa)}`
+    );
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Sayfa okunamadı");
+
+    $("#previewLastRow").textContent = data.son_veri_satiri;
+    $("#previewPending").textContent = data.bekleyen;
+    $("#excelStartRow").value = data.onerilen_baslangic;
+
+    const columns = $("#previewColumns");
+    columns.innerHTML = "";
+    Object.entries(data.sutun_eslestirmesi || {}).forEach(([field, label]) => {
+      const row = document.createElement("div");
+      row.innerHTML = `<code>${escapeHtml(label)}</code> ← ${escapeHtml(field)}`;
+      columns.appendChild(row);
+    });
+    const headerRow = document.createElement("div");
+    headerRow.innerHTML = `<code>Sayfa başlıkları:</code> ${escapeHtml(
+      (data.basliklar || []).filter(Boolean).join(" · ")
+    )}`;
+    columns.appendChild(headerRow);
+
+    $("#excelPreview").classList.remove("hidden");
+  } catch (error) {
+    excelError(error.message);
+  }
+}
+
+async function confirmExcelExport() {
+  const dosya = $("#excelFile").value;
+  const sayfa = $("#excelSheet").value;
+  const baslangic = parseInt($("#excelStartRow").value, 10);
+  if (!dosya || !sayfa) {
+    excelError("Önce dosya ve sayfa seç.");
+    return;
+  }
+
+  const button = $("#excelConfirm");
+  setBusy(button, true);
+  excelError("");
+  try {
+    const response = await fetch("/api/export-excel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dosya, sayfa, baslangic: baslangic || null }),
+    });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Aktarım başarısız");
-    toast(data.aktarilan > 0 ? `${data.aktarilan} fiş Excel'e aktarıldı` : "Aktarılacak yeni onaylı fiş yok");
-    if (data.aktarilan > 0) loadReceipts();
+
+    if (data.aktarilan > 0) {
+      toast(`${data.aktarilan} fiş eklendi (satır ${data.ilk_satir}-${data.son_satir})`);
+      $("#excelModal").classList.add("hidden");
+      loadReceipts();
+    } else {
+      excelError("Aktarılacak yeni onaylı fiş yok. Önce fişleri onayla.");
+    }
   } catch (error) {
-    toast(error.message, true);
+    excelError(error.message);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function uploadExcelFile(file) {
+  const button = $("#excelUploadButton");
+  setBusy(button, true);
+  excelError("");
+  try {
+    const response = await fetch("/api/excel/upload", {
+      method: "POST",
+      headers: { "X-Dosya-Adi": encodeURIComponent(file.name) },
+      body: file,
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Yükleme başarısız");
+    await openExcelModal();
+    $("#excelFile").value = data.yol;
+    await loadExcelSheets();
+    toast(`${data.ad} yüklendi`);
+  } catch (error) {
+    excelError(error.message);
   } finally {
     setBusy(button, false);
   }
@@ -283,9 +421,29 @@ form.addEventListener("submit", (event) => { event.preventDefault(); saveCurrent
 form.addEventListener("input", (event) => {
   if (event.target.name) event.target.classList.toggle("changed", event.target.value !== event.target.dataset.original);
 });
+form.elements.firma.addEventListener("blur", (event) => {
+  if (!event.target.value.trim()) {
+    event.target.value = "Selim İnşaat";
+    event.target.classList.toggle("changed", event.target.value !== event.target.dataset.original);
+  }
+});
 $("#approveButton").addEventListener("click", () => saveCurrent(true, true));
 $("#deleteButton").addEventListener("click", deleteCurrent);
-$("#exportButton").addEventListener("click", exportToExcel);
+$("#exportButton").addEventListener("click", openExcelModal);
+$("#excelFile").addEventListener("change", () => loadExcelSheets());
+$("#excelSheet").addEventListener("change", loadExcelPreview);
+$("#excelConfirm").addEventListener("click", confirmExcelExport);
+$("#excelClose").addEventListener("click", () => $("#excelModal").classList.add("hidden"));
+$("#excelCancel").addEventListener("click", () => $("#excelModal").classList.add("hidden"));
+$("#excelModal").addEventListener("click", (event) => {
+  if (event.target === $("#excelModal")) $("#excelModal").classList.add("hidden");
+});
+$("#excelUploadButton").addEventListener("click", () => $("#excelUpload").click());
+$("#excelUpload").addEventListener("change", (event) => {
+  const file = event.target.files && event.target.files[0];
+  event.target.value = "";
+  if (file) uploadExcelFile(file);
+});
 document.addEventListener("keydown", (event) => {
   if (event.ctrlKey && event.key === "Enter") { event.preventDefault(); saveCurrent(true, true); }
 });

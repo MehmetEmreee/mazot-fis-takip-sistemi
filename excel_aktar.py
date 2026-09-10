@@ -1,32 +1,23 @@
 r"""
-Onaylanmış fişleri (arayuz.py'da onaylanan kayıtlar) NUSRET MAZOT 2026
-defterinin "YİLMAZ MAZOT 2026" sayfasına aktarır.
+Onaylanmış fişleri, kullanıcının arayüzden seçtiği Excel defterine aktarır.
 
-Kullanım:
-    .\.venv\Scripts\python.exe excel_aktar.py
+Kullanım (arayüzden seçim yapmak yerine komut satırından):
+    .\.venv\Scripts\python.exe excel_aktar.py "<xlsx yolu>" "<sayfa adı>"
 
-Ne yapar:
-- sonuclar.json'daki, _onaylandi=true VE daha önce aktarılmamış kayıtları bulur
-- output/NUSRET MAZOT 2026_YENİ 2.xlsx dosyasındaki "YİLMAZ MAZOT 2026"
-  sayfasına, mevcut verinin biçimini (font, hücre formatı) birebir
-  koruyarak ekler
-- İlk çalıştırmada: eski (elle girilmiş) veri ile yeni (OCR) veri arasına
-  bir boşluk satırı bırakır. Sonraki çalıştırmalarda kaldığı yerden,
-  ek boşluk bırakmadan devam eder (bunu output/.aktarim_durumu.json'da takip eder)
-- Aktarılan kayıtları sonuclar.json'da _excel_aktarildi=true olarak işaretler
-  (aynı fiş ikinci kez eklenmesin diye)
+Davranış:
+- Seçilen sayfada veri içeren son satır bulunur, ARAYA BİR BOŞ SATIR
+  bırakılarak yeni kayıtlar en sona eklenir.
+- Sadece _onaylandi=true olan ve daha önce aktarılmamış kayıtlar yazılır;
+  aktarılanlar sonuclar.json'da _excel_aktarildi=true olarak işaretlenir,
+  böylece aynı fiş ikinci kez eklenmez.
+- Hücre biçimi (font, hizalama, sayı formatı) bir üstteki dolu satırdan
+  kopyalanır, defterin görünümü bozulmaz.
 
-Sütun eşleştirmesi (defterdeki gerçek kullanıma göre doğrulandı):
-  A TARİH        <- tarih
-  B FATURA NO     <- fis_no
-  C FİRMA         <- firma
-  D ARAÇ PLAKASI  <- plaka (gerçek plaka VEYA ekipman adı)
-  E ADI SOYADI    <- ad_soyad
-  F ARAÇ KM       <- km
-  H ALINAN LİTRE  <- litre  (G sütunu deftede kullanılmıyor, dokunulmuyor)
-  G, I, J, K, L, M: boş bırakılıyor — bu sütunlar (bakiye/fatura tutarı)
-  deftede ayrı bir süreçte, elle dolduruluyor; tek tek fiş satırlarında
-  zaten boş (bkz. satır 3918-3933).
+Sütun eşleştirmesi (NUSRET MAZOT defterindeki gerçek kullanıma göre):
+  A TARİH · B FATURA NO · C FİRMA · D ARAÇ PLAKASI · E ADI SOYADI
+  F ARAÇ KM · H ALINAN LİTRE
+G, I, J, K, L, M (bakiye/fatura tutarı) boş bırakılır — o sütunlar deftere
+ayrı bir süreçte, elle işleniyor.
 """
 
 import json
@@ -36,44 +27,161 @@ from datetime import datetime
 from pathlib import Path
 
 from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter
 
 ROOT = Path(__file__).resolve().parent
 DATA_FILE = ROOT / "sonuclar.json"
-OUTPUT_XLSX = ROOT / "output" / "NUSRET MAZOT 2026_YENİ 2.xlsx"
-STATE_FILE = ROOT / "output" / ".aktarim_durumu.json"
-SHEET_NAME = "YİLMAZ MAZOT 2026"
+AYAR_FILE = ROOT / "output" / ".excel_ayar.json"
+
+# Excel dosyası aranacak klasörler (arayüzdeki listeyi bunlar besler).
+ARAMA_KLASORLERI = [ROOT / "output", ROOT, Path.home() / "Documents"]
+EXCEL_UZANTILARI = {".xlsx", ".xlsm"}
 
 COL = {"tarih": 1, "fis_no": 2, "firma": 3, "plaka": 4, "ad_soyad": 5, "km": 6, "litre": 8}
-SON_ALAN_SUTUNU = 8  # H: satırın "gerçek veri var mı" kontrolü için taranan son sütun
+SUTUN_ETIKETLERI = {
+    "tarih": "A (TARİH)", "fis_no": "B (FATURA NO)", "firma": "C (FİRMA)",
+    "plaka": "D (ARAÇ PLAKASI)", "ad_soyad": "E (ADI SOYADI)",
+    "km": "F (ARAÇ KM)", "litre": "H (ALINAN LİTRE)",
+}
+# Son dolu satırı ararken bakılan sütunlar (yazdığımız sütunlar).
+TARANAN_SUTUNLAR = (1, 2, 3, 4, 5, 6, 8)
 
 
 def yukle_json(yol: Path, varsayilan):
     if not yol.exists():
         return varsayilan
-    return json.loads(yol.read_text(encoding="utf-8"))
+    try:
+        return json.loads(yol.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return varsayilan
 
 
 def kaydet_json(yol: Path, veri) -> None:
-    gecici = yol.with_suffix(".json.tmp")
+    yol.parent.mkdir(parents=True, exist_ok=True)
+    gecici = yol.with_suffix(yol.suffix + ".tmp")
     gecici.write_text(json.dumps(veri, ensure_ascii=False, indent=2), encoding="utf-8")
     gecici.replace(yol)
 
 
+def yol_guvenli_mi(yol: Path) -> bool:
+    """Tarayıcıdan gelen dosya yolunun izin verilen klasörlerin içinde
+    kaldığını doğrular — rastgele bir sistem dosyasına yazılmasını engeller."""
+    try:
+        cozulmus = yol.resolve()
+    except OSError:
+        return False
+    if cozulmus.suffix.lower() not in EXCEL_UZANTILARI:
+        return False
+    for klasor in ARAMA_KLASORLERI:
+        try:
+            cozulmus.relative_to(klasor.resolve())
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def excel_dosyalarini_bul() -> list[dict]:
+    """Arayüzdeki dosya listesini üretir (alt klasörlere inmez)."""
+    bulunanlar = {}
+    for klasor in ARAMA_KLASORLERI:
+        if not klasor.exists():
+            continue
+        for yol in sorted(klasor.glob("*")):
+            if yol.suffix.lower() not in EXCEL_UZANTILARI:
+                continue
+            if yol.name.startswith("~$"):  # Excel'in açıkken oluşturduğu kilit dosyası
+                continue
+            cozulmus = str(yol.resolve())
+            if cozulmus in bulunanlar:
+                continue
+            bulunanlar[cozulmus] = {
+                "yol": cozulmus,
+                "ad": yol.name,
+                "klasor": str(klasor),
+                "boyut_kb": round(yol.stat().st_size / 1024),
+            }
+    return list(bulunanlar.values())
+
+
+def sayfa_adlari(xlsx_yolu: Path) -> list[str]:
+    wb = load_workbook(xlsx_yolu, read_only=True)
+    try:
+        return list(wb.sheetnames)
+    finally:
+        wb.close()
+
+
+def _hucre_dolu_mu(deger) -> bool:
+    if deger is None:
+        return False
+    metin = str(deger).strip()
+    if not metin:
+        return False
+    # Boş satırlara önceden çekilmiş bakiye formüllerini "veri" sayma.
+    return not metin.startswith("=")
+
+
 def son_veri_satirini_bul(ws) -> int:
-    """FATURA NO / ARAÇ PLAKASI / ADI SOYADI (B, D, E) sütunlarından en az
-    birine bakarak gerçek işlem satırlarının bittiği son satırı bulur.
-    Sadece FİRMA (C) dolu olan tek başına satırlar (deftede satır 4767'de
-    olduğu gibi unutulmuş etiketler) veya G,I,J,K,L,M'deki bakiye
-    formülleri bu aramayı etkilemez."""
+    """Yazdığımız sütunlarda (A-F, H) gerçek işlem içeren son satır.
+
+    En az İKİ dolu hücre şartı var: gerçek bir fiş satırında tarih, fatura
+    no, firma, plaka... hep birlikte dolar. Tek bir hücresi dolu satırlar
+    (deftere unutulmuş 'SELİM İNŞAAT' etiketi ya da 'ARA TOPLAM' gibi)
+    işlem sayılmaz, yoksa yeni kayıtlar defterin çok altına düşerdi.
+    """
     son = 0
     for r in range(1, ws.max_row + 1):
-        for c in (2, 4, 5):
-            v = ws.cell(row=r, column=c).value
-            if v is not None and str(v).strip() != "":
-                son = r
-                break
+        dolu = sum(
+            1 for c in TARANAN_SUTUNLAR
+            if _hucre_dolu_mu(ws.cell(row=r, column=c).value)
+        )
+        if dolu >= 2:
+            son = r
     return son
+
+
+def sayfa_onizleme(xlsx_yolu: Path, sayfa: str) -> dict:
+    """Arayüzde gösterilecek bilgi: başlıklar, son dolu satır, önerilen
+    başlangıç satırı ve son birkaç satırın özeti."""
+    wb = load_workbook(xlsx_yolu)
+    try:
+        if sayfa not in wb.sheetnames:
+            raise ValueError(f"'{sayfa}' sayfası bulunamadı")
+        ws = wb[sayfa]
+        basliklar = [
+            (str(ws.cell(row=1, column=c).value).strip()
+             if ws.cell(row=1, column=c).value is not None else "")
+            for c in range(1, 14)
+        ]
+        son = son_veri_satirini_bul(ws)
+        ornekler = []
+        for r in range(max(1, son - 2), son + 1):
+            ornekler.append({
+                "satir": r,
+                "degerler": [
+                    ("" if ws.cell(row=r, column=c).value is None
+                     else str(ws.cell(row=r, column=c).value))
+                    for c in TARANAN_SUTUNLAR
+                ],
+            })
+        return {
+            "basliklar": basliklar,
+            "son_veri_satiri": son,
+            "onerilen_baslangic": son + 2,  # bir satır boşluk bırak
+            "ornek_satirlar": ornekler,
+            "sutun_eslestirmesi": SUTUN_ETIKETLERI,
+        }
+    finally:
+        wb.close()
+
+
+def bekleyen_kayitlar(kayitlar: list[dict] | None = None) -> list[dict]:
+    kayitlar = yukle_json(DATA_FILE, []) if kayitlar is None else kayitlar
+    return [
+        k for k in kayitlar
+        if k.get("_onaylandi") and not k.get("_excel_aktarildi")
+        and not k.get("HATA") and not k.get("_silindi")
+    ]
 
 
 def tarihi_cevir(deger):
@@ -83,7 +191,7 @@ def tarihi_cevir(deger):
         return deger
     m = re.match(r"^(\d{1,2})[./](\d{1,2})[./](\d{4})$", str(deger).strip())
     if not m:
-        return deger  # ayrıştıramazsak olduğu gibi bırak, elle düzeltilir
+        return deger
     gun, ay, yil = (int(x) for x in m.groups())
     try:
         return datetime(yil, ay, gun)
@@ -103,7 +211,7 @@ def sayiya_cevir(deger):
         try:
             return float(temiz)
         except ValueError:
-            return deger  # sayı değilse olduğu gibi bırak
+            return deger
 
 
 def hucre_stilini_kopyala(kaynak_hucre, hedef_hucre) -> None:
@@ -114,34 +222,33 @@ def hucre_stilini_kopyala(kaynak_hucre, hedef_hucre) -> None:
     hedef_hucre.number_format = kaynak_hucre.number_format
 
 
-def aktar() -> dict:
-    """Onaylı ve daha önce aktarılmamış fişleri deftere yazar. Hem CLI'den
-    (main()) hem de arayuz.py'daki 'Excel'e Aktar' butonundan çağrılır —
-    mantık tek bir yerde, iki tüketicisi var."""
-    if not OUTPUT_XLSX.exists():
-        return {"hata": f"{OUTPUT_XLSX} bulunamadı. Önce kaynak defterin bir "
-                         f"kopyasını output/ klasörüne koy."}
+def aktar(xlsx_yolu: Path, sayfa: str, baslangic_satir: int | None = None) -> dict:
+    """Onaylı fişleri seçilen dosya/sayfaya ekler. baslangic_satir verilmezse
+    son dolu satırın iki altından (bir boşluk bırakarak) başlar."""
+    xlsx_yolu = Path(xlsx_yolu)
+    if not xlsx_yolu.exists():
+        return {"hata": f"Dosya bulunamadı: {xlsx_yolu}"}
+    if not yol_guvenli_mi(xlsx_yolu):
+        return {"hata": "Bu konuma yazmaya izin yok (yalnızca proje ve Belgeler klasörü)."}
 
     kayitlar = yukle_json(DATA_FILE, [])
-    aktarilacaklar = [
-        k for k in kayitlar
-        if k.get("_onaylandi") and not k.get("_excel_aktarildi") and not k.get("HATA")
-    ]
-
+    aktarilacaklar = bekleyen_kayitlar(kayitlar)
     if not aktarilacaklar:
         return {"aktarilan": 0, "detay": []}
 
-    durum = yukle_json(STATE_FILE, {})
-    wb = load_workbook(OUTPUT_XLSX)
-    ws = wb[SHEET_NAME]
+    try:
+        wb = load_workbook(xlsx_yolu)
+    except Exception as exc:
+        return {"hata": f"Dosya açılamadı ({exc}). Excel'de açıksa kapatıp tekrar dene."}
 
-    if "son_satir" in durum:
-        baslangic = durum["son_satir"] + 1
-        stil_satiri = durum["son_satir"]
-    else:
-        son_veri = son_veri_satirini_bul(ws)
-        baslangic = son_veri + 2  # bir satır boşluk bırak
-        stil_satiri = son_veri
+    if sayfa not in wb.sheetnames:
+        wb.close()
+        return {"hata": f"'{sayfa}' sayfası bulunamadı"}
+
+    ws = wb[sayfa]
+    son_veri = son_veri_satirini_bul(ws)
+    baslangic = int(baslangic_satir) if baslangic_satir else son_veri + 2
+    stil_satiri = son_veri if son_veri else 1
 
     detay = []
     satir = baslangic
@@ -159,6 +266,8 @@ def aktar() -> dict:
 
         kayit["_excel_aktarildi"] = True
         kayit["_excel_satir"] = satir
+        kayit["_excel_dosya"] = str(xlsx_yolu)
+        kayit["_excel_sayfa"] = sayfa
         kayit["_excel_aktarim_zamani"] = datetime.now().isoformat(timespec="seconds")
         detay.append({
             "satir": satir, "dosya": kayit.get("_dosya"), "fis_no": kayit.get("fis_no"),
@@ -166,15 +275,43 @@ def aktar() -> dict:
         })
         satir += 1
 
-    wb.save(OUTPUT_XLSX)
-    kaydet_json(DATA_FILE, kayitlar)
-    kaydet_json(STATE_FILE, {"son_satir": satir - 1})
+    try:
+        wb.save(xlsx_yolu)
+    except PermissionError:
+        wb.close()
+        return {"hata": "Dosyaya yazılamadı — Excel'de açık olabilir, kapatıp tekrar dene."}
+    finally:
+        wb.close()
 
-    return {"aktarilan": len(aktarilacaklar), "detay": detay, "ilk_satir": baslangic, "son_satir": satir - 1}
+    kaydet_json(DATA_FILE, kayitlar)
+    kaydet_json(AYAR_FILE, {"dosya": str(xlsx_yolu), "sayfa": sayfa})
+
+    return {
+        "aktarilan": len(aktarilacaklar), "detay": detay,
+        "ilk_satir": baslangic, "son_satir": satir - 1,
+        "dosya": str(xlsx_yolu), "sayfa": sayfa,
+    }
+
+
+def son_ayar() -> dict:
+    return yukle_json(AYAR_FILE, {})
 
 
 def main():
-    sonuc = aktar()
+    if len(sys.argv) < 3:
+        ayar = son_ayar()
+        if ayar.get("dosya") and ayar.get("sayfa"):
+            print(f"Kullanım: python excel_aktar.py \"<xlsx yolu>\" \"<sayfa adı>\"")
+            print(f"Son kullanılan: \"{ayar['dosya']}\" / \"{ayar['sayfa']}\"")
+        else:
+            print('Kullanım: python excel_aktar.py "<xlsx yolu>" "<sayfa adı>"')
+            print("\nBulunan Excel dosyaları:")
+            for d in excel_dosyalarini_bul():
+                print(f"  {d['yol']}")
+        sys.exit(1)
+
+    sonuc = aktar(Path(sys.argv[1]), sys.argv[2],
+                  int(sys.argv[3]) if len(sys.argv) > 3 else None)
     if "hata" in sonuc:
         print(f"HATA: {sonuc['hata']}")
         sys.exit(1)
@@ -183,8 +320,8 @@ def main():
         return
     for d in sonuc["detay"]:
         print(f"  satır {d['satir']}: {d['dosya']} -> fiş no {d['fis_no']}, {d['firma']}, {d['plaka']}")
-    print(f"\n{sonuc['aktarilan']} fiş '{OUTPUT_XLSX.name}' / '{SHEET_NAME}' sayfasına eklendi "
-          f"(satır {sonuc['ilk_satir']}-{sonuc['son_satir']}).")
+    print(f"\n{sonuc['aktarilan']} fiş '{Path(sonuc['dosya']).name}' / '{sonuc['sayfa']}' "
+          f"sayfasına eklendi (satır {sonuc['ilk_satir']}-{sonuc['son_satir']}).")
 
 
 if __name__ == "__main__":

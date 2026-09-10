@@ -313,6 +313,45 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
             self.wfile.write(content)
             return
 
+        if parsed.path == "/api/excel/files":
+            try:
+                excel_aktar.DATA_FILE = DATA_FILE
+                self.send_json({
+                    "dosyalar": excel_aktar.excel_dosyalarini_bul(),
+                    "son_ayar": excel_aktar.son_ayar(),
+                    "bekleyen": len(excel_aktar.bekleyen_kayitlar()),
+                })
+            except Exception as exc:
+                self.send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        if parsed.path == "/api/excel/sheets":
+            dosya = unquote(parse_qs(parsed.query).get("dosya", [""])[0])
+            try:
+                yol = Path(dosya)
+                if not excel_aktar.yol_guvenli_mi(yol):
+                    raise ValueError("Bu dosyaya erişim izni yok")
+                self.send_json({"sayfalar": excel_aktar.sayfa_adlari(yol)})
+            except Exception as exc:
+                self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+
+        if parsed.path == "/api/excel/preview":
+            query = parse_qs(parsed.query)
+            dosya = unquote(query.get("dosya", [""])[0])
+            sayfa = unquote(query.get("sayfa", [""])[0])
+            try:
+                yol = Path(dosya)
+                if not excel_aktar.yol_guvenli_mi(yol):
+                    raise ValueError("Bu dosyaya erişim izni yok")
+                excel_aktar.DATA_FILE = DATA_FILE
+                onizleme = excel_aktar.sayfa_onizleme(yol, sayfa)
+                onizleme["bekleyen"] = len(excel_aktar.bekleyen_kayitlar())
+                self.send_json(onizleme)
+            except Exception as exc:
+                self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+
         if parsed.path == "/":
             self.path = "/index.html"
         elif parsed.path == "/cek":
@@ -331,6 +370,8 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
             self.handle_delete()
         elif path == "/api/export-excel":
             self.handle_export_excel()
+        elif path == "/api/excel/upload":
+            self.handle_excel_upload()
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -483,15 +524,51 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
             self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
     def handle_export_excel(self) -> None:
+        """Arayüzden seçilen dosya/sayfa/başlangıç satırına aktarır."""
         try:
+            payload = self.read_json()
+            dosya = payload.get("dosya")
+            sayfa = payload.get("sayfa")
+            baslangic = payload.get("baslangic")
+            if not dosya or not sayfa:
+                raise ValueError("Excel dosyası ve sayfa seçilmeli")
+
             with DATA_LOCK:
                 excel_aktar.DATA_FILE = DATA_FILE
-                sonuc = excel_aktar.aktar()
+                sonuc = excel_aktar.aktar(Path(dosya), sayfa, baslangic)
             if "hata" in sonuc:
                 self.send_json({"error": sonuc["hata"]}, HTTPStatus.BAD_REQUEST)
                 return
             self.send_json({"ok": True, **sonuc})
+        except (ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except Exception as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def handle_excel_upload(self) -> None:
+        """Tarayıcıdan .xlsx yüklenince output/ klasörüne kaydeder."""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length <= 0:
+                raise ValueError("Boş yükleme")
+            if length > MAX_UPLOAD_BYTES:
+                raise ValueError("Dosya çok büyük (30MB sınırı)")
+            ad = unquote(self.headers.get("X-Dosya-Adi", "defter.xlsx"))
+            ad = Path(ad).name
+            if Path(ad).suffix.lower() not in excel_aktar.EXCEL_UZANTILARI:
+                raise ValueError("Sadece .xlsx/.xlsm dosyası yüklenebilir")
+
+            hedef_klasor = ROOT / "output"
+            hedef_klasor.mkdir(exist_ok=True)
+            hedef = hedef_klasor / ad
+            if hedef.exists():
+                hedef = benzersiz_hedef(hedef_klasor, Path(ad).stem, Path(ad).suffix.lower())
+            hedef.write_bytes(self.rfile.read(length))
+
+            self.send_json({"ok": True, "yol": str(hedef), "ad": hedef.name})
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        except OSError as exc:
             self.send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
 

@@ -7,7 +7,7 @@ import re
 
 TABLO_ALANLARI = ("fis_no", "tarih", "firma", "plaka", "ad_soyad", "km", "litre")
 BOS_DEGER = "-"
-VARSAYILAN_FIRMA = "SELİM İNŞAAT"
+VARSAYILAN_FIRMA = "Selim İnşaat"
 
 
 def bos_degeri_duzelt(deger) -> str:
@@ -36,11 +36,11 @@ def plakayi_duzelt(plaka, ekipman_durumu: bool = False) -> str:
 
 
 def firmayi_duzelt(firma) -> str:
-    """'Sayın:' alanı gerçekten boşsa (fiş, şirketin kendi aracı/ekipmanı
-    için doldurulmuş demektir), varsayılan olarak şirketin kendi adını yazar."""
-    if firma is None or not str(firma).strip():
+    """Boş veya yalnızca rakamlardan oluşan anlamsız firma değerini düzeltir."""
+    metin = "" if firma is None else str(firma).strip()
+    if not metin or metin == BOS_DEGER or metin.isdigit():
         return VARSAYILAN_FIRMA
-    return str(firma).strip()
+    return metin
 
 
 def fis_normalize_et(veri: dict) -> dict:

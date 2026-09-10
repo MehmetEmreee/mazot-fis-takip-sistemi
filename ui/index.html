@@ -124,6 +124,60 @@
       </section>
     </main>
 
+    <div class="modal-backdrop hidden" id="excelModal">
+      <div class="modal">
+        <div class="modal-head">
+          <div>
+            <span class="eyebrow">EXCEL AKTARIMI</span>
+            <h2>Hangi deftere eklensin?</h2>
+          </div>
+          <button class="icon-button" id="excelClose" type="button" title="Kapat">✕</button>
+        </div>
+
+        <div class="modal-body">
+          <label class="field full">
+            <span>Excel dosyası</span>
+            <select id="excelFile"></select>
+          </label>
+          <div class="upload-row">
+            <input type="file" id="excelUpload" accept=".xlsx,.xlsm" hidden />
+            <button class="button secondary" id="excelUploadButton" type="button">
+              Listede yoksa dosya yükle
+            </button>
+          </div>
+
+          <label class="field full">
+            <span>Sayfa</span>
+            <select id="excelSheet"></select>
+          </label>
+
+          <div class="preview-box hidden" id="excelPreview">
+            <div class="preview-line">
+              <span>Sayfadaki son dolu satır</span><b id="previewLastRow">—</b>
+            </div>
+            <div class="preview-line">
+              <span>Eklenecek ilk satır <small>(1 boşluk bırakılır)</small></span>
+              <input type="number" id="excelStartRow" min="1" />
+            </div>
+            <div class="preview-line">
+              <span>Aktarılacak onaylı fiş</span><b id="previewPending">0</b>
+            </div>
+            <details class="preview-details">
+              <summary>Sütun eşleştirmesi ve sayfa başlıkları</summary>
+              <div id="previewColumns"></div>
+            </details>
+          </div>
+
+          <p class="modal-error hidden" id="excelError"></p>
+        </div>
+
+        <div class="modal-actions">
+          <button class="button secondary" id="excelCancel" type="button">İptal</button>
+          <button class="button primary" id="excelConfirm" type="button">Deftere ekle</button>
+        </div>
+      </div>
+    </div>
+
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="/ui/app.js"></script>
   </body>
