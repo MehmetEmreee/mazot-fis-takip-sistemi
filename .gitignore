@@ -1,0 +1,28 @@
+# Python sanal ortamı (uv ile yeniden oluşturulabilir)
+.venv/
+__pycache__/
+*.pyc
+
+# Kişisel veri içeren fiş fotoğrafları ve bunlardan üretilen çıktılar
+# (isim, plaka, firma gibi bilgiler içeriyor — GitHub'a gitmemeli)
+fisler/
+sonuclar.json
+fisler.xlsx
+crops/
+
+# Test/teşhis kalıntıları
+ornek.jpg
+row_profile.png
+diag.py
+diag2.py
+
+# Önceki yarım kalmış git denemesi (içinde kaynak dosya yok)
+mazot-fis-yonetim-sistemi/
+
+# Çalışma zamanı logları
+*.log
+*.log.out
+*.err.log
+
+# Claude Code oturum dosyaları
+.claude/

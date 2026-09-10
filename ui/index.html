@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>Fiş Kontrol</title>
+    <link rel="stylesheet" href="/ui/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">F</div>
+        <div>
+          <h1>Fiş Kontrol</h1>
+          <p>OCR sonuçlarını görselle karşılaştır</p>
+        </div>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-copy">
+          <span id="progressText">0 / 0 kontrol edildi</span>
+          <span id="progressPercent">%0</span>
+        </div>
+        <div class="progress"><span id="progressBar"></span></div>
+      </div>
+      <div class="topbar-actions">
+        <a class="button subtle" href="/cek" title="Telefondan fiş fotoğrafı çek">
+          <span aria-hidden="true">📷</span> Fiş Çek
+        </a>
+        <button class="button subtle" id="reloadButton" type="button" title="OCR sonuçlarını yeniden oku">
+          <span aria-hidden="true">↻</span> Yenile
+        </button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <aside class="sidebar">
+        <label class="search">
+          <span aria-hidden="true">⌕</span>
+          <input id="searchInput" type="search" placeholder="Dosya, plaka veya fiş no ara" />
+        </label>
+        <div class="filters" role="group" aria-label="Fiş filtresi">
+          <button class="filter active" data-filter="all" type="button">Tümü <b id="allCount">0</b></button>
+          <button class="filter" data-filter="pending" type="button">Bekleyen <b id="pendingCount">0</b></button>
+          <button class="filter" data-filter="suspicious" type="button">Şüpheli <b id="suspiciousCount">0</b></button>
+        </div>
+        <div class="receipt-list" id="receiptList"></div>
+        <div class="data-time" id="dataTime"></div>
+      </aside>
+
+      <section class="workspace" id="workspace">
+        <div class="empty-state" id="emptyState">
+          <div class="empty-icon">□</div>
+          <h2>Kontrol edilecek fiş bulunamadı</h2>
+          <p>`sonuclar.json` oluştuğunda Yenile düğmesine bas.</p>
+        </div>
+
+        <div class="review hidden" id="review">
+          <section class="image-panel">
+            <div class="panel-heading">
+              <div>
+                <span class="eyebrow">ORİJİNAL GÖRSEL</span>
+                <h2 id="imageFilename">—</h2>
+              </div>
+              <div class="image-tools">
+                <button type="button" id="rotateLeft" title="Sola döndür">↶</button>
+                <button type="button" id="rotateRight" title="Sağa döndür">↷</button>
+                <button type="button" id="zoomOut" title="Uzaklaştır">−</button>
+                <button type="button" id="zoomReset" title="Görsele sığdır">Sığdır</button>
+                <button type="button" id="zoomIn" title="Yakınlaştır">＋</button>
+              </div>
+            </div>
+            <div class="image-stage" id="imageStage">
+              <img id="receiptImage" alt="Kontrol edilen fiş" draggable="false" />
+              <div class="image-error hidden" id="imageError">Görsel bulunamadı</div>
+            </div>
+            <p class="image-hint">Yakınlaştırmak için fare tekerleğini kullan · Görseli sürükleyebilirsin</p>
+          </section>
+
+          <section class="form-panel">
+            <div class="panel-heading form-heading">
+              <div>
+                <span class="eyebrow">OCR SONUCU</span>
+                <h2>Okunan bilgiler</h2>
+              </div>
+              <span class="status-badge" id="statusBadge"></span>
+            </div>
+
+            <div class="warning hidden" id="warningBox">
+              <span aria-hidden="true">!</span>
+              <div><strong>Kontrol öneriliyor</strong><p id="warningText"></p></div>
+            </div>
+
+            <form id="receiptForm" autocomplete="off">
+              <div class="field-grid">
+                <label class="field"><span>Fiş No (MRK)</span><input name="fis_no" /></label>
+                <label class="field"><span>Tarih</span><input name="tarih" placeholder="GG/AA/YYYY" /></label>
+                <label class="field full"><span>Firma</span><input name="firma" placeholder="Fişte varsa firma/müşteri adı" /></label>
+                <label class="field full highlight"><span>Plaka</span><input name="plaka" /></label>
+                <label class="field full"><span>Ad Soyad</span><input name="ad_soyad" /></label>
+                <label class="field"><span>Kilometre</span><input name="km" inputmode="numeric" /></label>
+                <label class="field"><span>Litre</span><input name="litre" inputmode="decimal" /></label>
+              </div>
+
+              <div class="meta-row">
+                <span id="durationMeta"></span>
+                <span id="changeMeta"></span>
+              </div>
+
+              <div class="actions">
+                <button class="button secondary" id="saveButton" type="submit">Değişiklikleri kaydet</button>
+                <button class="button primary" id="approveButton" type="button"><span>✓</span> Doğru, onayla</button>
+              </div>
+              <p class="shortcut"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> ile onayla ve sonraki fişe geç</p>
+            </form>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="/ui/app.js"></script>
+  </body>
+</html>

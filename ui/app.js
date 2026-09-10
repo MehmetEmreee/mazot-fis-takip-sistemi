@@ -1,0 +1,268 @@
+const FIELDS = ["fis_no", "tarih", "firma", "plaka", "ad_soyad", "km", "litre"];
+
+const state = {
+  receipts: [],
+  selectedFilename: null,
+  filter: "all",
+  query: "",
+  modified: null,
+  transform: { scale: 1, rotation: 0, x: 0, y: 0 },
+  dragging: null,
+};
+
+const $ = (selector) => document.querySelector(selector);
+const $$ = (selector) => [...document.querySelectorAll(selector)];
+const form = $("#receiptForm");
+
+async function loadReceipts({ keepSelection = true, announce = false } = {}) {
+  setBusy($("#reloadButton"), true);
+  try {
+    const response = await fetch("/api/receipts", { cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Sonuçlar yüklenemedi");
+    state.receipts = data.receipts || [];
+    state.modified = data.modified;
+
+    if (!keepSelection || !state.receipts.some((r) => r._dosya === state.selectedFilename)) {
+      const firstPending = state.receipts.find((r) => !r._onaylandi);
+      state.selectedFilename = (firstPending || state.receipts[0] || {})._dosya || null;
+    }
+    renderAll();
+    if (announce) toast(`${state.receipts.length} fiş yeniden yüklendi`);
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    setBusy($("#reloadButton"), false);
+  }
+}
+
+function filteredReceipts() {
+  const query = state.query.trim().toLocaleLowerCase("tr-TR");
+  return state.receipts.filter((receipt) => {
+    if (state.filter === "pending" && receipt._onaylandi) return false;
+    if (state.filter === "suspicious" && (!receipt._kontrol_gerekli || receipt._isleniyor)) return false;
+    if (!query) return true;
+    return [receipt._dosya, receipt.plaka, receipt.fis_no, receipt.ad_soyad]
+      .filter(Boolean)
+      .some((value) => String(value).toLocaleLowerCase("tr-TR").includes(query));
+  });
+}
+
+function renderAll() {
+  renderCounts();
+  renderList();
+  renderReceipt();
+}
+
+function renderCounts() {
+  const total = state.receipts.length;
+  const approved = state.receipts.filter((r) => r._onaylandi).length;
+  const suspicious = state.receipts.filter((r) => r._kontrol_gerekli && !r._isleniyor).length;
+  const percent = total ? Math.round((approved / total) * 100) : 0;
+  $("#allCount").textContent = total;
+  $("#pendingCount").textContent = total - approved;
+  $("#suspiciousCount").textContent = suspicious;
+  $("#progressText").textContent = `${approved} / ${total} kontrol edildi`;
+  $("#progressPercent").textContent = `%${percent}`;
+  $("#progressBar").style.width = `${percent}%`;
+  $("#dataTime").textContent = state.modified
+    ? `Son veri: ${new Date(state.modified).toLocaleString("tr-TR", { dateStyle: "short", timeStyle: "short" })}`
+    : "sonuclar.json bekleniyor";
+}
+
+function renderList() {
+  const list = $("#receiptList");
+  const receipts = filteredReceipts();
+  list.innerHTML = "";
+  receipts.forEach((receipt) => {
+    const actualIndex = state.receipts.indexOf(receipt) + 1;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `receipt-item ${receipt._dosya === state.selectedFilename ? "active" : ""}`;
+    const statusClass = receipt._onaylandi ? "approved" : receipt._isleniyor ? "processing" : receipt._kontrol_gerekli ? "suspicious" : "";
+    button.innerHTML = `
+      <span class="item-index">${actualIndex}</span>
+      <span class="item-copy">
+        <strong>${escapeHtml(receipt._dosya || "Adsız fiş")}</strong>
+        <small>${escapeHtml(receipt.plaka || receipt.fis_no || "Okuma bekleniyor")}</small>
+      </span>
+      <span class="item-status ${statusClass}" aria-label="Durum"></span>`;
+    button.addEventListener("click", () => selectReceipt(receipt._dosya));
+    list.appendChild(button);
+  });
+
+  if (!receipts.length && state.receipts.length) {
+    list.innerHTML = '<div class="empty-state" style="height:180px"><p>Bu filtrede fiş yok.</p></div>';
+  }
+}
+
+function renderReceipt() {
+  const receipt = currentReceipt();
+  $("#emptyState").classList.toggle("hidden", Boolean(receipt));
+  $("#review").classList.toggle("hidden", !receipt);
+  if (!receipt) return;
+
+  $("#imageFilename").textContent = receipt._dosya || "—";
+  const image = $("#receiptImage");
+  $("#imageError").classList.add("hidden");
+  image.classList.remove("hidden");
+  image.src = `/api/image?file=${encodeURIComponent(receipt._dosya || "")}`;
+  image.alt = `${receipt._dosya || "Fiş"} görseli`;
+  resetTransform();
+
+  FIELDS.forEach((field) => {
+    form.elements[field].value = receipt[field] ?? "";
+    form.elements[field].dataset.original = receipt[field] ?? "";
+    form.elements[field].classList.remove("changed");
+  });
+
+  const badge = $("#statusBadge");
+  badge.className = "status-badge";
+  if (receipt._onaylandi) {
+    badge.textContent = "✓ Onaylandı";
+    badge.classList.add("approved");
+  } else if (receipt._isleniyor) {
+    badge.textContent = "OCR işleniyor";
+  } else if (receipt._kontrol_gerekli) {
+    badge.textContent = "Şüpheli";
+    badge.classList.add("suspicious");
+  } else {
+    badge.textContent = "Bekliyor";
+  }
+
+  $("#warningBox").classList.toggle("hidden", !receipt._kontrol_gerekli);
+  $("#warningText").textContent = receipt._kontrol_nedeni || "Otomatik kontrol bu kaydı işaretledi.";
+  $("#durationMeta").textContent = receipt._sure_sn != null ? `OCR süresi: ${receipt._sure_sn} sn` : "";
+  $("#changeMeta").textContent = receipt._duzeltildi ? "Elle düzeltildi" : receipt._onaylandi ? "Değişiklik yapılmadı" : "";
+  $("#approveButton").innerHTML = receipt._onaylandi ? "<span>✓</span> Onayı güncelle" : "<span>✓</span> Doğru, onayla";
+}
+
+function currentReceipt() {
+  return state.receipts.find((r) => r._dosya === state.selectedFilename) || null;
+}
+
+function selectReceipt(filename) {
+  state.selectedFilename = filename;
+  renderList();
+  renderReceipt();
+}
+
+function formValues() {
+  return Object.fromEntries(FIELDS.map((field) => [field, form.elements[field].value.trim()]));
+}
+
+async function saveCurrent(approved, goNext = false) {
+  const receipt = currentReceipt();
+  if (!receipt) return;
+  const button = approved ? $("#approveButton") : $("#saveButton");
+  setBusy(button, true);
+  try {
+    const response = await fetch("/api/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: receipt._dosya, fields: formValues(), approved }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Kayıt başarısız");
+    const index = state.receipts.findIndex((r) => r._dosya === receipt._dosya);
+    state.receipts[index] = data.receipt;
+    toast(approved ? "Fiş onaylandı" : "Değişiklikler kaydedildi");
+    if (goNext) selectNextPending(index);
+    else renderAll();
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+function selectNextPending(afterIndex) {
+  const total = state.receipts.length;
+  for (let step = 1; step <= total; step += 1) {
+    const candidate = state.receipts[(afterIndex + step) % total];
+    if (!candidate._onaylandi) {
+      state.selectedFilename = candidate._dosya;
+      renderAll();
+      return;
+    }
+  }
+  renderAll();
+  toast("Tüm fişler kontrol edildi");
+}
+
+function resetTransform() {
+  state.transform = { scale: 1, rotation: 0, x: 0, y: 0 };
+  applyTransform();
+}
+
+function applyTransform() {
+  const { scale, rotation, x, y } = state.transform;
+  $("#receiptImage").style.transform = `translate(${x}px, ${y}px) rotate(${rotation}deg) scale(${scale})`;
+}
+
+function zoom(amount) {
+  state.transform.scale = Math.min(4, Math.max(0.5, state.transform.scale + amount));
+  applyTransform();
+}
+
+function toast(message, error = false) {
+  const element = $("#toast");
+  element.textContent = message;
+  element.classList.toggle("error", error);
+  element.classList.add("show");
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => element.classList.remove("show"), 2400);
+}
+
+function setBusy(button, busy) {
+  button.disabled = busy;
+  button.setAttribute("aria-busy", String(busy));
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>'"]/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
+  })[character]);
+}
+
+$("#reloadButton").addEventListener("click", () => loadReceipts({ announce: true }));
+$("#searchInput").addEventListener("input", (event) => { state.query = event.target.value; renderList(); });
+$$('.filter').forEach((button) => button.addEventListener("click", () => {
+  state.filter = button.dataset.filter;
+  $$(".filter").forEach((item) => item.classList.toggle("active", item === button));
+  renderList();
+}));
+
+form.addEventListener("submit", (event) => { event.preventDefault(); saveCurrent(false); });
+form.addEventListener("input", (event) => {
+  if (event.target.name) event.target.classList.toggle("changed", event.target.value !== event.target.dataset.original);
+});
+$("#approveButton").addEventListener("click", () => saveCurrent(true, true));
+document.addEventListener("keydown", (event) => {
+  if (event.ctrlKey && event.key === "Enter") { event.preventDefault(); saveCurrent(true, true); }
+});
+
+$("#receiptImage").addEventListener("error", () => {
+  $("#receiptImage").classList.add("hidden");
+  $("#imageError").classList.remove("hidden");
+});
+$("#zoomIn").addEventListener("click", () => zoom(0.2));
+$("#zoomOut").addEventListener("click", () => zoom(-0.2));
+$("#zoomReset").addEventListener("click", resetTransform);
+$("#rotateLeft").addEventListener("click", () => { state.transform.rotation -= 90; applyTransform(); });
+$("#rotateRight").addEventListener("click", () => { state.transform.rotation += 90; applyTransform(); });
+$("#imageStage").addEventListener("wheel", (event) => { event.preventDefault(); zoom(event.deltaY < 0 ? 0.15 : -0.15); }, { passive: false });
+$("#imageStage").addEventListener("pointerdown", (event) => {
+  state.dragging = { startX: event.clientX, startY: event.clientY, x: state.transform.x, y: state.transform.y };
+  $("#imageStage").classList.add("dragging");
+  $("#imageStage").setPointerCapture(event.pointerId);
+});
+$("#imageStage").addEventListener("pointermove", (event) => {
+  if (!state.dragging) return;
+  state.transform.x = state.dragging.x + event.clientX - state.dragging.startX;
+  state.transform.y = state.dragging.y + event.clientY - state.dragging.startY;
+  applyTransform();
+});
+$("#imageStage").addEventListener("pointerup", () => { state.dragging = null; $("#imageStage").classList.remove("dragging"); });
+
+loadReceipts({ keepSelection: false });

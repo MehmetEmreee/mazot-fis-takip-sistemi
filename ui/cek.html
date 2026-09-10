@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="light" />
+    <title>Toplu Fiş Yükle</title>
+    <link rel="stylesheet" href="/ui/style.css" />
+    <style>
+      body { overflow: auto; background: var(--canvas); overscroll-behavior-y: contain; }
+      .cek-wrap { max-width: 560px; margin: 0 auto; padding: 12px 14px 110px; }
+      .cek-header { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 2px 16px; }
+      .cek-header h1 { margin: 0; font: 700 22px/1.2 Georgia, serif; }
+      .cek-header p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+      .back-link { flex: none; padding: 8px 10px; border-radius: 9px; color: var(--muted); background: var(--paper); border: 1px solid var(--line); text-decoration: none; font-size: 12px; }
+
+      .summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+      .summary-card { padding: 12px 8px; border: 1px solid var(--line); border-radius: 13px; background: var(--paper); text-align: center; }
+      .summary-card strong { display: block; font-size: 20px; line-height: 1; }
+      .summary-card span { display: block; margin-top: 5px; color: var(--muted); font-size: 10px; font-weight: 700; }
+      .summary-card.processing strong { color: var(--amber); }
+      .summary-card.done strong { color: var(--green); }
+
+      .mode-card { padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--paper); box-shadow: var(--shadow); }
+      .mode-title { margin: 0 0 10px; font-size: 12px; color: var(--muted); font-weight: 800; }
+      .shoot-button, .gallery-button {
+        width: 100%; min-height: 76px; display: flex; align-items: center; justify-content: center; gap: 12px;
+        border-radius: 14px; cursor: pointer; font-weight: 800;
+      }
+      .shoot-button { border: 0; color: #fff; background: var(--green); font-size: 17px; box-shadow: 0 8px 20px rgba(23,107,77,.18); }
+      .shoot-button:active { background: var(--green-dark); transform: scale(.99); }
+      .shoot-button .icon { font-size: 27px; }
+      .gallery-button { min-height: 54px; margin-top: 9px; border: 1px solid var(--line); color: var(--ink); background: #f7f9f7; font-size: 13px; }
+      .gallery-button:active { background: #eef2ef; }
+      .mode-hint { margin: 10px 2px 0; color: var(--muted); font-size: 10px; line-height: 1.5; text-align: center; }
+
+      .queue-heading { display: flex; align-items: center; justify-content: space-between; margin: 18px 2px 8px; }
+      .queue-heading strong { font-size: 13px; }
+      .queue-heading span { color: var(--muted); font-size: 10px; }
+      .upload-list { display: flex; flex-direction: column; gap: 8px; }
+      .upload-card { display: grid; grid-template-columns: 54px 1fr auto; gap: 11px; padding: 10px; border: 1px solid var(--line); border-radius: 13px; background: var(--paper); align-items: center; }
+      .upload-thumb { width: 54px; height: 54px; border-radius: 9px; object-fit: cover; background: #e9eeeb; }
+      .upload-info { min-width: 0; }
+      .upload-info strong, .upload-info span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .upload-info strong { font-size: 12px; }
+      .upload-info span { margin-top: 4px; color: var(--muted); font-size: 10px; }
+      .upload-status { padding: 5px 8px; border-radius: 99px; white-space: nowrap; font-size: 9px; font-weight: 800; background: #eef1ef; color: var(--muted); }
+      .upload-status.uploading, .upload-status.processing { background: var(--amber-soft); color: var(--amber); }
+      .upload-status.ok { background: var(--green-soft); color: var(--green-dark); }
+      .upload-status.suspicious { background: var(--amber-soft); color: var(--amber); }
+      .upload-status.error { border: 0; background: #fde4de; color: #8a3328; cursor: pointer; }
+      .empty-hint { margin: 0; padding: 30px 10px; border: 1px dashed #cfd7d2; border-radius: 13px; color: var(--muted); text-align: center; font-size: 12px; }
+
+      .sticky-capture { position: fixed; z-index: 5; left: 0; right: 0; bottom: 0; padding: 10px max(14px, env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left)); background: rgba(243,245,242,.94); backdrop-filter: blur(12px); border-top: 1px solid var(--line); }
+      .sticky-capture button { display: block; width: min(532px, 100%); height: 58px; margin: 0 auto; border: 0; border-radius: 14px; color: #fff; background: var(--green); font-size: 16px; font-weight: 850; cursor: pointer; }
+      .sticky-capture button:active { background: var(--green-dark); }
+      .offline { display: none; margin-bottom: 9px; padding: 9px; border-radius: 10px; background: #fde4de; color: #8a3328; text-align: center; font-size: 11px; font-weight: 700; }
+      .offline.show { display: block; }
+    </style>
+  </head>
+  <body>
+    <main class="cek-wrap">
+      <header class="cek-header">
+        <div><h1>Toplu Fiş Yükle</h1><p>Çekmeye devam et, OCR bilgisayarda sırayla ilerlesin</p></div>
+        <a class="back-link" href="/">Kontrol →</a>
+      </header>
+
+      <section class="summary" aria-label="Oturum özeti">
+        <div class="summary-card"><strong id="totalCount">0</strong><span>EKLENEN</span></div>
+        <div class="summary-card processing"><strong id="processingCount">0</strong><span>BEKLEYEN</span></div>
+        <div class="summary-card done"><strong id="doneCount">0</strong><span>TAMAMLANAN</span></div>
+      </section>
+
+      <div class="offline" id="offlineWarning">Bağlantı yok. Fotoğraflar sayfada bekliyor; bağlantı gelince yeniden dene.</div>
+
+      <section class="mode-card">
+        <p class="mode-title">Nasıl eklemek istersin?</p>
+        <input type="file" accept="image/*" capture="environment" id="cameraInput" hidden />
+        <input type="file" accept="image/*" multiple id="galleryInput" hidden />
+        <button class="shoot-button" id="shootButton" type="button">
+          <span class="icon" aria-hidden="true">📷</span><span>Şimdi Fiş Çek</span>
+        </button>
+        <button class="gallery-button" id="galleryButton" type="button">▦ Galeriden Toplu Seç</button>
+        <p class="mode-hint">Fotoğraf kaydedilir kaydedilmez sıradakini çekebilirsin. OCR’ı beklemen gerekmez.</p>
+      </section>
+
+      <div class="queue-heading"><strong>Bu oturumun kuyruğu</strong><span id="queueHint">Henüz fiş yok</span></div>
+      <section class="upload-list" id="uploadList"></section>
+      <p class="empty-hint" id="emptyHint">Kamerayla peş peşe çek veya galeriden bütün fişleri tek seferde seç.</p>
+    </main>
+
+    <div class="sticky-capture">
+      <button id="nextButton" type="button">📷 Sıradaki Fişi Çek</button>
+    </div>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script>
+      const cameraInput = document.getElementById("cameraInput");
+      const galleryInput = document.getElementById("galleryInput");
+      const uploadList = document.getElementById("uploadList");
+      const emptyHint = document.getElementById("emptyHint");
+      const totalCount = document.getElementById("totalCount");
+      const processingCount = document.getElementById("processingCount");
+      const doneCount = document.getElementById("doneCount");
+      const queueHint = document.getElementById("queueHint");
+      const offlineWarning = document.getElementById("offlineWarning");
+      const toastEl = document.getElementById("toast");
+
+      const jobs = new Map();
+      const uploadQueue = [];
+      let activeUploads = 0;
+      let pollTimer = null;
+      const MAX_PARALLEL_UPLOADS = 2;
+
+      function toast(message, isError = false) {
+        toastEl.textContent = message;
+        toastEl.classList.toggle("error", isError);
+        toastEl.classList.add("show");
+        clearTimeout(toast.timer);
+        toast.timer = setTimeout(() => toastEl.classList.remove("show"), 2400);
+      }
+
+      function updateCounts() {
+        const values = [...jobs.values()];
+        const done = values.filter((job) => job.state === "done").length;
+        const failed = values.filter((job) => job.state === "error").length;
+        const pending = values.length - done - failed;
+        totalCount.textContent = values.length;
+        processingCount.textContent = pending;
+        doneCount.textContent = done;
+        queueHint.textContent = failed ? `${failed} yükleme yeniden denenmeli` : pending ? `${pending} fiş sırada` : values.length ? "Kuyruk tamamlandı" : "Henüz fiş yok";
+        emptyHint.classList.toggle("hidden", values.length > 0);
+        offlineWarning.classList.toggle("show", !navigator.onLine);
+      }
+
+      function createCard(job) {
+        const card = document.createElement("article");
+        card.className = "upload-card";
+        card.innerHTML = `
+          <img class="upload-thumb" alt="Seçilen fiş önizlemesi" />
+          <div class="upload-info"><strong>${escapeHtml(job.file.name)}</strong><span>Yükleme sırasında</span></div>
+          <button class="upload-status uploading" type="button" disabled>Bekliyor</button>`;
+        const image = card.querySelector("img");
+        image.src = job.previewUrl;
+        image.addEventListener("load", () => URL.revokeObjectURL(job.previewUrl), { once: true });
+        card.querySelector(".upload-status").addEventListener("click", () => retry(job.id));
+        uploadList.prepend(card);
+        job.card = card;
+      }
+
+      function setCard(job, state, title, detail, statusText) {
+        job.state = state;
+        const status = job.card.querySelector(".upload-status");
+        job.card.querySelector("strong").textContent = title;
+        job.card.querySelector(".upload-info span").textContent = detail;
+        status.textContent = statusText;
+        status.className = `upload-status ${state}`;
+        status.disabled = state !== "error";
+        updateCounts();
+      }
+
+      function addFiles(fileList) {
+        const files = [...fileList].filter((file) => file.type.startsWith("image/"));
+        files.forEach((file) => {
+          const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+          const job = { id, file, previewUrl: URL.createObjectURL(file), state: "uploading", filename: null, card: null };
+          jobs.set(id, job);
+          createCard(job);
+          uploadQueue.push(job);
+        });
+        updateCounts();
+        pumpUploads();
+        if (files.length > 1) toast(`${files.length} fotoğraf kuyruğa eklendi`);
+      }
+
+      function pumpUploads() {
+        while (activeUploads < MAX_PARALLEL_UPLOADS && uploadQueue.length) {
+          const job = uploadQueue.shift();
+          if (job.state === "error") continue;
+          activeUploads += 1;
+          sendFile(job).finally(() => { activeUploads -= 1; pumpUploads(); });
+        }
+      }
+
+      async function sendFile(job) {
+        setCard(job, "uploading", job.file.name, "Bilgisayara gönderiliyor…", "Yükleniyor");
+        try {
+          const response = await fetch("/api/upload", {
+            method: "POST",
+            headers: { "Content-Type": job.file.type || "image/jpeg" },
+            body: job.file,
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || "Yükleme başarısız");
+          job.filename = data.filename;
+          job.uploadTime = data.receipt && data.receipt._yukleme_zamani;
+          setCard(job, "processing", data.filename, `OCR kuyruğunda · sıra yaklaşık ${data.queue_size || 1}`, "OCR bekliyor");
+          startPolling();
+        } catch (error) {
+          setCard(job, "error", job.file.name, error.message, "Tekrar dene");
+        }
+      }
+
+      function retry(id) {
+        const job = jobs.get(id);
+        if (!job || job.state !== "error") return;
+        job.state = "uploading";
+        uploadQueue.push(job);
+        updateCounts();
+        pumpUploads();
+      }
+
+      function renderReceipt(job, receipt) {
+        if (receipt._isleniyor) return;
+        if (receipt.HATA) {
+          setCard(job, "done", "OCR tamamlanamadı", receipt.HATA, "Kontrol et");
+          return;
+        }
+        const title = receipt.plaka !== "-" ? receipt.plaka : receipt.fis_no;
+        const detail = [`No: ${receipt.fis_no}`, `${receipt.litre} L`].join(" · ");
+        const stateClass = receipt._kontrol_gerekli ? "suspicious" : "ok";
+        setCard(job, "done", title, detail, receipt._kontrol_gerekli ? "Kontrol gerekli" : "Tamam");
+        job.card.querySelector(".upload-status").className = `upload-status ${stateClass}`;
+      }
+
+      async function pollResults() {
+        const waiting = [...jobs.values()].filter((job) => job.state === "processing" && job.filename);
+        if (!waiting.length) { stopPolling(); return; }
+        try {
+          const response = await fetch("/api/receipts", { cache: "no-store" });
+          if (!response.ok) throw new Error("Sonuçlar alınamadı");
+          const data = await response.json();
+          waiting.forEach((job) => {
+            const receipt = data.receipts.find((item) => item._dosya === job.filename || item._yukleme_zamani === job.uploadTime);
+            if (receipt) {
+              if (receipt._dosya !== job.filename && !receipt._isleniyor) job.filename = receipt._dosya;
+              renderReceipt(job, receipt);
+            }
+          });
+        } catch (_) { /* Geçici ağ kesintisinde sıradaki yoklamayı bekle. */ }
+      }
+
+      function startPolling() {
+        if (pollTimer) return;
+        pollResults();
+        pollTimer = setInterval(pollResults, 2000);
+      }
+
+      function stopPolling() {
+        if (pollTimer) clearInterval(pollTimer);
+        pollTimer = null;
+      }
+
+      function escapeHtml(value) {
+        return String(value).replace(/[&<>'"]/g, (character) => ({
+          "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
+        })[character]);
+      }
+
+      document.getElementById("shootButton").addEventListener("click", () => cameraInput.click());
+      document.getElementById("nextButton").addEventListener("click", () => cameraInput.click());
+      document.getElementById("galleryButton").addEventListener("click", () => galleryInput.click());
+      cameraInput.addEventListener("change", () => { addFiles(cameraInput.files || []); cameraInput.value = ""; });
+      galleryInput.addEventListener("change", () => { addFiles(galleryInput.files || []); galleryInput.value = ""; });
+      window.addEventListener("online", () => { updateCounts(); pumpUploads(); });
+      window.addEventListener("offline", updateCounts);
+      updateCounts();
+    </script>
+  </body>
+</html>

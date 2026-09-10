@@ -1,0 +1,232 @@
+MAZOT FİŞİ OCR PROJESİ — İLERLEME NOTLARI
+(Kaydedilme tarihi: 10 Eylül 2026)
+==========================================
+
+AMAÇ
+----
+Elle doldurulmuş mazot/akaryakıt satış fişlerindeki bilgileri (plaka, tarih,
+km, litre, tutar, fiş no) otomatik okuyup Excel'e aktarmak. Toplam ~300 fiş
+fotoğrafı var. Bugünkü hedef: yöntemin doğruluğunu test edip karar vermekti.
+
+
+1) İLK DENEME: TrOCR (microsoft/trocr-base-handwritten) — BAŞARISIZ
+---------------------------------------------------------------------
+- Kurulum sorunu: Python 3.14 çok yeni olduğu için bazı paketlerin
+  (tokenizers) hazır "wheel"i yoktu, kaynaktan derleme de başarısız oluyordu.
+  Ayrıca transformers 5.x, bu eski modelin tokenizer formatıyla uyumsuzdu.
+- ÇÖZÜM: uv ile Python 3.12.14 kurup .venv'i onunla yeniden oluşturduk.
+  transformers==4.46.3 + tokenizers==0.20.3 (hazır wheel'den, sorunsuz) +
+  torch (CPU sürümü) kuruldu. Kurulum artık hatasız çalışıyor.
+- SONUÇ: Model teknik olarak çalıştı ama El Yazısı DOĞRULUĞU ÇOK DÜŞÜKTÜ.
+  Örnek fişte (fiber/bilye/filtre/toplam listesi) 7 satırdan 0'ı doğru
+  okundu — model tamamen İngilizce (IAM veri seti) ile eğitilmiş, Türkçe
+  kelime/karakterleri hiç görmemiş, anlamsız İngilizce kelimeler üretti.
+  Rakamlar bile tutarsızdı.
+- KARAR: TrOCR bu iş için KULLANILAMAZ. Kod hâlâ duruyor (test_trocr.py,
+  crop_lines.py) ama üretimde kullanılmayacak.
+
+
+2) İKİNCİ DENEME: Qwen2.5-VL (yerel, Ollama üzerinden) — BAŞARILI
+--------------------------------------------------------------------
+- Ollama (ollama.com) winget ile kuruldu, qwen2.5vl:7b modeli indirildi (~6GB).
+- GPU: RTX 4060 Ti, 8GB VRAM — model %87 GPU / %13 CPU olarak çalışıyor.
+  NOT: Kurulumdan sonra hem "ollama app.exe" (otomatik başlayan tepsi
+  uygulaması) hem manuel başlattığımız "ollama serve" aynı anda çalışırsa
+  GPU tespiti bozulup tamamen CPU'ya düşebiliyor (146 sn/fiş gibi çok yavaş
+  oldu). Çözüm: sadece TEK bir ollama süreci çalışsın (görev yöneticisinden
+  "ollama" ve "ollama app" süreçlerini kontrol et, ikisi birden varsa
+  birini kapat).
+- Büyük/gerçek fotoğraflarda (12MP telefon fotoğrafı) varsayılan bağlam
+  penceresi (4096 token) yetmiyordu → "num_ctx": 8192 yapıldı.
+- HIZ OPTİMİZASYONU: Görseli göndermeden önce uzun kenarını 1600 piksele
+  küçültmek doğruluğu bozmadan süreyi 74 sn'den 23 sn'ye düşürdü (~3 kat).
+- SONUÇLAR:
+  * Örnek fiş (fiber/bilye/toplam listesi): 7 kalemden 5'i tam doğru,
+    2'sinde tek harf hatası (Bilye→Bilya, İşçilik→Işgılık), TÜM TUTARLAR
+    (7/7) doğru okundu.
+  * Gerçek mazot fişi (fis1.jpeg, Selim İnşaat - Akaryakıt Satış Fişi):
+    fiş no, tarih, ad-soyad, km, litre TAM DOĞRU okundu. Plaka "HZ 1663"
+    yerine "H2 1663" okundu (Z/2 karışıklığı, tek karakter hatası).
+    Bu fişte "tutar" alanı zaten yoktu, model bunu doğru şekilde boş
+    (null) bıraktı.
+- KARAR: Qwen2.5-VL, TrOCR'dan kıyaslanamayacak kadar iyi ve 300 fişlik
+  iş için GERÇEKÇİ bir aday.
+
+
+3) KURULAN OTOMATİK BORU HATTI (PIPELINE)
+--------------------------------------------
+Dosyalar (hepsi C:\Users\mehme\Documents\mazot içinde):
+
+- test_trocr.py       → TrOCR denemesi (artık kullanılmıyor, referans için duruyor)
+- crop_lines.py        → Görseli satır satır otomatik kırpan yardımcı script
+                          (TrOCR testi için yazıldı, Qwen ile gerek kalmadı)
+- test_qwen_vl.py      → Qwen2.5-VL ile serbest metin okuma testi (ilk deneme)
+- extract_json.py      → ASIL ÇALIŞAN SCRIPT. Fiş fotoğrafını (veya bir
+                          klasördeki tüm fotoğrafları) Qwen2.5-VL ile okuyup
+                          yapılandırılmış JSON üretir (fis_no, tarih, plaka,
+                          ad_soyad, km, litre, tutar). Otomatik doğrulama da
+                          yapar:
+                            - Plaka bir parçada hem harf hem rakam karışıksa
+                              (örn. "H2") → şüpheli işaretlenir
+                            - Tarih formatı bozuksa → şüpheli işaretlenir
+                            - fis_no/plaka/litre boşsa → şüpheli işaretlenir
+                          Ayrıca hız için görseli 1600px'e küçültüyor.
+                          Sonuçları sonuclar.json'a yazıyor.
+- export_excel.py      → sonuclar.json'ı fisler.xlsx'e çevirir, şüpheli
+                          satırları SARI renkle işaretler (elle kontrol için).
+
+KULLANIM (300 fiş için, yarın):
+    1. Tüm fiş fotoğraflarını bir klasöre topla (örn. fisler\)
+    2. Ollama'nın çalıştığını kontrol et (tek süreç!):
+         ollama ps      (model yüklüyse "GPU" yazmalı, "CPU" değil)
+       Çalışmıyorsa:
+         & "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe" serve
+    3. .\.venv\Scripts\python.exe extract_json.py fisler
+    4. .\.venv\Scripts\python.exe export_excel.py
+    5. fisler.xlsx'i aç, sarı işaretli satırları elle kontrol et.
+
+
+3b) MODEL KARŞILAŞTIRMASI: Qwen3-VL:8b denendi — Qwen2.5-VL'de KALINDI
+--------------------------------------------------------------------------
+- Soru: "Ekran kartına göre daha optimize/yüksek çözünürlüklü çalışacak
+  bir alternatif yok mu?" sorusu üzerine Qwen3-VL:8b (daha yeni nesil,
+  aynı VRAM sınıfı ~6.1GB, 256K bağlam penceresi) indirilip fis1.jpeg
+  üzerinde qwen2.5vl:7b ile birebir karşılaştırıldı.
+- SONUÇ: Doğruluk neredeyse birebir aynıydı (aynı plaka hatası: "HZ 1663"
+  yerine "H2 1663" — HER İKİ MODEL DE bu hatayı yaptı; Qwen3-VL ayrıca
+  "ALİ" yerine "ALI" yazarak Türkçe İ karakterini kaçırdı, hafif geriledi).
+  AMA SÜRE: Qwen2.5-VL 23,1 sn iken Qwen3-VL 209,7 sn sürdü (~9 kat yavaş).
+- NEDEN: Qwen3 ailesi varsayılan olarak yanıttan önce uzun bir "düşünme"
+  (chain-of-thought) süreci çalıştırıyor (log'da kısa bir JSON için 2500+
+  token üretildiğini gördük). Bu genel akıl yürütme görevlerinde faydalı
+  ama bizim dar kapsamlı "şu alanları oku" görevimizde sadece gecikme
+  ekliyor, doğruluğu artırmıyor.
+- KARAR: ÜRETİM MODELİ qwen2.5vl:7b olarak KALDI (extract_json.py zaten
+  varsayılan olarak bunu kullanıyor). qwen3-vl:8b diskte duruyor (6.1GB,
+  istenirse "ollama rm qwen3-vl:8b" ile silinebilir), kullanılmıyor.
+- Denenmeyen ama gelecekte akla gelebilecek alternatif: MiniCPM-V 4.5
+  (OCR benchmark'larında iddialı ama Ollama'daki gerçek kullanıcı
+  deneyimleri karışık) — düşük öncelik, mevcut sonuç zaten tatmin edici.
+
+
+3c) ALAN EŞLEŞTİRME SORUNU: "Araç" fişi ile "Ekipman" fişi karışıklığı
+--------------------------------------------------------------------------
+- SORUN: Bazı fişlerde yakıt bir araca değil, sabit bir ekipmana (kazık
+  makinesi, jeneratör vb.) veriliyor. Bu durumda fişi dolduran kişi basılı
+  alan etiketlerini (Araç Plakası / Adı Soyadı / K.M.) gerçek anlamlarının
+  dışında kullanıyor: "Araç Plakası" alanına bir KİŞİ İSMİ, "Adı Soyadı"
+  alanına EKİPMAN TÜRÜ yazılıyor (gerçek örnek: fis2.jpeg — "Selim İnşaat"
+  fişi, "Araç Plakası" alanına "Hasan Zemin" [kişi], "Adı Soyadı" alanına
+  "Kazık Mak." [ekipman] yazılmıştı; "K.M." alanına da ekipmanı kullanan
+  ikinci kişinin adı "Veli Tebep" yazılmıştı).
+- İLK DENEME BAŞARISIZ: Modele (Qwen2.5-VL) hem okuma hem "bu durumu tanıyıp
+  alanları doğru yere taşıma" işini birlikte yaptırmaya çalıştık — model
+  durumu kısmen fark etti ama takas mantığını YANLIŞ uyguladı (plaka ve
+  ad_soyad'ı ters/karışık doldurdu). 7B'lik bir modelden çok adımlı koşullu
+  mantığı tek seferde güvenilir şekilde yürütmesini beklemek riskliymiş.
+- ÇÖZÜM (extract_json.py'a uygulandı): İki adıma bölündü:
+  1. Model SADECE ham/literal okuma yapıyor — her basılı etiketin altına
+     ne yazılmışsa onu birebir aktarıyor, yorum katmıyor (sayin_alani,
+     arac_plakasi_alani, adi_soyadi_alani, km_alani gibi ham alanlar).
+  2. Takas mantığı artık PYTHON KODUNDA (esle() fonksiyonu), deterministik:
+     Gerçek bir Türkçe plaka her zaman rakam içerir — "Araç Plakası"
+     alanında HİÇ rakam yoksa bunu "ekipman durumu" kabul edip:
+       plaka ← "Adı Soyadı" alanındaki değer (ekipman adı)
+       ad_soyad ← "Araç Plakası" + "K.M." alanındaki isim(ler), " - " ile
+       km ← null
+     Normal durumda alanlar olduğu gibi eşleniyor.
+  SONUÇ: Bu yaklaşım fis2.jpeg'te takas mantığını %100 doğru uyguladı.
+  Kalan hatalar artık mantık hatası değil, saf OCR belirsizliği (örn.
+  "Tebep" → "Tekep" yanlış okunması gibi) — bu normal ve beklenen.
+- GÜVENLİK ÖNLEMİ: "_ekipman_durumu" true olan her fiş otomatik olarak
+  "kontrol gerekli" (sarı) işaretleniyor — bu senaryo nadir/alışılmadık
+  olduğu için, güven oluşana kadar hepsinin elle bir kez kontrol edilmesi
+  öneriliyor.
+- YENİ ALAN: "firma" eklendi (fişin 'Sayın:' alanından okunuyor — fişin
+  üstündeki sabit "Selim İnşaat" logosuyla karıştırılmaması gerektiği
+  modele ayrıca belirtildi).
+- YENİ SORUN/DÜZELTME: fis1.jpeg'te "Sayın:" alanı fişte GERÇEKTEN BOŞTU,
+  ama model orayı "7" diye hallüsine etti (boş alanı rastgele doldurma).
+  Buna karşı metin_supheli_mi() eklendi: bir metin alanı doluysa ama
+  1-2 karakterden kısaysa veya tamamen rakamsa, "muhtemelen hallüsinasyon"
+  diye işaretleniyor (alan gerçekten BOŞSA bu normal, işaretlenmiyor).
+
+
+3d) KLASÖR DÜZENİ: fisler\ alt klasörü
+------------------------------------------
+- fis1.jpeg ve fis2.jpeg artık proje kökünde değil, "fisler\" alt
+  klasöründe. SEBEP: extract_json.py yanlışlıkla "." (proje kökü) ile
+  çalıştırıldığında, kökteki test/teşhis dosyalarını (ornek.jpg,
+  row_profile.png gibi — bunlar gerçek fiş DEĞİL) da fiş sanıp anlamsız
+  veri üretti. Gerçek fiş fotoğrafları HER ZAMAN "fisler\" klasörüne
+  konulmalı, script de hep bu klasöre karşı çalıştırılmalı:
+      .\.venv\Scripts\python.exe extract_json.py fisler
+  300'lük iş için de tüm fotoğraflar bu "fisler\" klasörüne toplanacak.
+
+
+3e) TELEFONDAN DOĞRUDAN FOTOĞRAF ÇEKME (arayuz.py'a eklendi)
+------------------------------------------------------------
+- Kullanıcı kendi geliştirdiği "arayuz.py" (sade Python, framework yok —
+  ui/ klasöründe index.html/app.js/style.css) ile fişleri görselle yan
+  yana kontrol edip onaylayabiliyordu (127.0.0.1:8765, sadece bu
+  bilgisayardan erişilebiliyordu).
+- EKLENEN ÖZELLİK: iPhone'dan WiFi üzerinden doğrudan fotoğraf çekip
+  otomatik işleme:
+  * Sunucu artık varsayılan olarak 0.0.0.0'da dinliyor (--host ile
+    değiştirilebilir), böylece aynı WiFi ağındaki telefon erişebiliyor.
+    Başlangıçta LAN IP'sini yazdırıyor (örn. http://192.168.1.100:8765/cek).
+  * Yeni sayfa: /cek (ui/cek.html) — büyük bir "📷 Fotoğraf Çek" butonu,
+    <input type="file" accept="image/*" capture="environment"> kullanıyor
+    (iOS Safari'de dokunulunca doğrudan kamera açılıyor). Fotoğraf
+    çekilince otomatik yükleniyor, aynı butona tekrar basıp yeni fotoğraf
+    çekilebiliyor.
+  * Yeni uç: POST /api/upload — telefon fotoğrafı ham byte olarak
+    gönderiyor (multipart yok, basit). Sunucu: fisler/ klasörüne
+    zaman damgalı isimle kaydediyor → extract_json.py'daki resmi_oku()
+    fonksiyonunu DOĞRUDAN import edip çağırıyor (ayrı script çalıştırmaya
+    gerek yok) → sonucu sonuclar.json'a ekliyor. Telefon ekranında anında
+    "Tamam" / "Kontrol gerekli" / "Hata" durumu görünüyor.
+  * index.html'e "📷 Fiş Çek" bağlantısı eklendi (masaüstünden /cek
+    linkini bulmak için).
+- TEST EDİLDİ: /cek sayfası açılıyor, /api/upload gerçek bir fiş
+  fotoğrafıyla test edildi — dosya fisler/'e düştü, Qwen2.5-VL otomatik
+  okudu, sonuclar.json'a eklendi, arayuz.py'ı yeniden başlatmaya bile
+  gerek kalmadan (dosyayı her istekte yeniden okuyor).
+- ÖNEMLİ — AĞ/GÜVENLİK NOTU: 0.0.0.0'da dinlemek, aynı WiFi ağındaki
+  HERKESİN (şifre/kimlik doğrulama yok) bu arayüze erişip fiş
+  fotoğraflarını ve verilerini (isimler, plakalar) görebilmesi, hatta
+  yeni fotoğraf yükleyebilmesi anlamına gelir. Ev/ofis ağı için normalde
+  makul bir risk ama bilinçli olarak kabul edilmiş bir durum. Windows
+  Güvenlik Duvarı ilk bağlantıda "İzin ver" penceresi çıkarabilir.
+  İstenirse ileride basit bir PIN/şifre koruması eklenebilir (şu an yok).
+- ÇALIŞTIRMA: .\.venv\Scripts\python.exe arayuz.py  (Ollama'nın tek
+  örnek halinde çalışıyor olması gerekiyor — bkz. bölüm 2).
+- KÜÇÜK SORUN/DERS: Test sırasında PowerShell'in ConvertTo-Json +
+  Set-Content -Encoding utf8 kombinasyonu Türkçe karakterleri bozdu
+  (mojibake, "İ" → "Ä°" gibi). JSON dosyasını PowerShell'den DEĞİL,
+  her zaman Python'dan (json.dumps + encoding="utf-8") okuyup yazmak
+  gerekiyor — bunu unutma.
+- EŞ ZAMANLI DEĞİŞİKLİK: Bu sırada kullanıcı kendisi de "normalizasyon.py"
+  diye yeni bir dosya ekledi (extract_json.py ve arayuz.py'a bağlandı):
+  boş/None alanları "-" yapıyor, il kodu yazılmamış plakaların başına
+  otomatik "34" (İstanbul) ekliyor (ekipman fişlerine dokunmuyor). Bu,
+  yukarıdaki değişikliklerle birlikte test edildi, sorunsuz çalışıyor.
+
+
+4) AÇIK NOKTALAR / YARIN KONUŞULACAKLAR
+-------------------------------------------
+- Sabit bir araç filosu (bilinen plaka listesi) yok — bu yüzden plaka
+  doğrulaması sadece FORMAT kontrolü yapıyor (harf/rakam karışıklığı),
+  gerçek plakayla eşleştirme yapmıyor. İleride sabit bir liste ortaya
+  çıkarsa, en yakın plakaya otomatik düzeltme eklenebilir (doğruluğu
+  ciddi artırır).
+- 300 fişin GERÇEK doğruluk oranı henüz bilinmiyor — sadece 2 örnek
+  test edildi. Yarın daha büyük bir örneklemle (örn. 15-20 fiş) doğruluk
+  oranı daha güvenilir ölçülmeli.
+- Tahmini süre: ~20-25 sn/fiş (GPU, 1600px küçültülmüş) → 300 fiş için
+  yaklaşık 1,5-2 saat, tek seferlik arka plan işi.
+- "Tutar" alanı bazı fiş türlerinde yok (örn. fis1.jpeg) — bu normal,
+  script bunu null olarak bırakıyor, hata değil.
+- Gerçekçi beklenti: %100 hatasız otomasyon mümkün değil; hedef, elle
+  kontrol edilmesi gereken satır sayısını (sarı işaretliler) mümkün
+  olduğunca azaltmak.
