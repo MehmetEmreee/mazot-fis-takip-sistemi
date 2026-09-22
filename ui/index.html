@@ -38,6 +38,14 @@
 
     <main class="layout">
       <aside class="sidebar">
+        <div class="party-panel">
+          <label for="partySelect">FİŞ PARTİSİ</label>
+          <div class="party-row">
+            <select id="partySelect" title="Aktif veya arşivlenmiş partiyi göster"></select>
+            <button id="newPartyButton" type="button" title="Aktif partiyi kapat ve yenisini aç">＋ Yeni</button>
+          </div>
+          <small id="partyStatus">Partiler yükleniyor…</small>
+        </div>
         <label class="search">
           <span aria-hidden="true">⌕</span>
           <input id="searchInput" type="search" placeholder="Dosya, plaka veya fiş no ara" />
@@ -170,6 +178,13 @@
             <div class="preview-line">
               <span>Aktarılacak onaylı fiş</span><b id="previewPending">0</b>
             </div>
+            <label class="preview-line checkbox-line" id="excelAllLine">
+              <span>
+                Daha önce aktarılanları da ekle
+                <small>(yanlış dosyaya aktarıldıysa tümünü yeniden aktarmak için)</small>
+              </span>
+              <input type="checkbox" id="excelAll" />
+            </label>
             <details class="preview-details">
               <summary>Sütun eşleştirmesi ve sayfa başlıkları</summary>
               <div id="previewColumns"></div>
@@ -186,6 +201,34 @@
         <div class="modal-actions">
           <button class="button secondary" id="excelCancel" type="button">İptal</button>
           <button class="button primary" id="excelConfirm" type="button">Deftere ekle</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop hidden" id="partyModal">
+      <div class="modal party-modal">
+        <div class="modal-head">
+          <div>
+            <span class="eyebrow">YENİ PARTİ</span>
+            <h2>Aktif partiyi kapat</h2>
+          </div>
+          <button class="icon-button" id="partyClose" type="button" title="Kapat">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="party-summary" id="partySummary"></div>
+          <label class="field full">
+            <span>Yeni partinin adı</span>
+            <input id="newPartyName" placeholder="Örn. 22 Eylül Gelen Fişler" maxlength="80" />
+          </label>
+          <div class="auto-excel-note">
+            <strong>Excel aktarımı senin kontrolünde</strong>
+            <p>Bu işlem Excel’e hiçbir şey yazmaz. Arşivden veya aktif listeden istediğin partiyi seçip üstteki “Excel’e Aktar” düğmesiyle dosya, sayfa ve başlangıç satırını ayrıca seçebilirsin.</p>
+          </div>
+          <p class="modal-error hidden" id="partyError"></p>
+        </div>
+        <div class="modal-actions">
+          <button class="button secondary" id="partyCancel" type="button">İptal</button>
+          <button class="button primary" id="partyConfirm" type="button">Partiyi arşivle ve yenisini aç</button>
         </div>
       </div>
     </div>

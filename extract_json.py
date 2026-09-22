@@ -16,8 +16,10 @@ import os
 import re
 import sys
 import time
+import unicodedata
 from pathlib import Path
 import requests
+from rapidfuzz import fuzz
 from PIL import Image, ImageOps
 from dogrulama import kaydi_dogrula
 from normalizasyon import fis_normalize_et
@@ -26,7 +28,9 @@ OLLAMA_URL = "http://localhost:11434/api/chat"
 MODEL = os.environ.get("QWEN_MODEL", "qwen2.5vl:7b")
 IMG_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 MAX_KENAR = 1600  # uzun kenarı bu boyuta indir (hız için)
-NUM_CTX = int(os.environ.get("QWEN_NUM_CTX", "8192"))
+# Ölçümde 4096 ve 8192 aynı alan doğruluğunu verdi; 8192, 8 GB ekran
+# kartında ciddi CPU taşmasına yol açtığı için güvenli yüksek kalite profili 4096.
+NUM_CTX = int(os.environ.get("QWEN_NUM_CTX", "4096"))
 
 JSON_SCHEMA = {
     "type": "object",
@@ -89,24 +93,112 @@ DİKKAT EDİLECEK NOKTALAR:
 - 'MRK' numarasını rakam rakam say, baştaki sıfırlar dahil hepsini yaz."""
 
 
+# Ekipman fişlerinde hangi hücrenin ekipman, hangisinin kişi olduğunu
+# ayırt etmek için kullanılan sözlük. OCR harfleri bozabildiği için
+# eşleştirme bire bir değil, benzerlik puanıyla yapılır.
+EKIPMAN_SOZLUGU = (
+    "SILINDIR", "JENERATOR", "FORKLIFT", "KAZIK", "MAKINE", "MAKINA", "VINC",
+    "JCB", "KATO", "KAWAZAKI", "ZOOMLION", "MANITOU", "TANK", "EKSKAVATOR",
+    "KEPCE", "LODER", "BEKO", "MIKSER", "POMPA", "KOMPRESOR", "GREYDER",
+    "DOZER", "PALETLI", "KIRALIK", "KOMATSU", "HIDROMEK", "BOMAG", "DYNAPAC",
+    "TAKEUCHI", "KUBOTA", "CATERPILLAR", "VIBRATOR", "ASFALT", "KULE",
+)
+_RAKAM_HARF = str.maketrans(
+    {"0": "O", "1": "I", "2": "Z", "4": "A", "5": "S", "6": "G", "7": "T", "8": "B"}
+)
+
+
+def _ekipman_anahtari(metin: str) -> str:
+    """Türkçe harfleri ve OCR'ın harf yerine okuduğu rakamları sadeleştirir."""
+    metin = unicodedata.normalize("NFKD", (metin or "").upper())
+    metin = "".join(c for c in metin if not unicodedata.combining(c))
+    for eski, yeni in (
+        ("Ç", "C"), ("Ğ", "G"), ("Ö", "O"), ("Ş", "S"), ("Ü", "U"), ("İ", "I")
+    ):
+        metin = metin.replace(eski, yeni)
+    metin = metin.translate(_RAKAM_HARF)
+    return re.sub(r"[^A-Z0-9 ]+", " ", metin).strip()
+
+
+def ekipman_puani(metin: str) -> float:
+    """Metnin bir iş makinesi/ekipman adı olma ihtimalini 0-100 arası verir."""
+    anahtar = _ekipman_anahtari(metin)
+    if not anahtar:
+        return 0.0
+    en_iyi = 0.0
+    for kelime in anahtar.split():
+        if len(kelime) < 3:
+            continue
+        for sozcuk in EKIPMAN_SOZLUGU:
+            en_iyi = max(en_iyi, fuzz.ratio(kelime, sozcuk))
+    for sozcuk in EKIPMAN_SOZLUGU:
+        if len(sozcuk) >= 5:
+            en_iyi = max(en_iyi, fuzz.partial_ratio(anahtar, sozcuk))
+    return en_iyi
+
+
+EKIPMAN_ESIGI = 78
+
+
+def _plaka_gibi(metin: str) -> bool:
+    """Metin gerçek bir Türkçe plaka kalıbına uyuyor mu (34 ABC 123)?"""
+    anahtar = re.sub(r"\s+", " ", _ekipman_anahtari(metin))
+    return bool(re.fullmatch(r"\d{2} ?[A-Z]{1,3} ?\d{2,5}", anahtar))
+
+
+ISIM_OLMAYANLAR = {"NULL", "NONE", "YOK", "BOS", "KM", "K M", "MRK"}
+
+
+def _isim_gibi(metin: str) -> bool:
+    """'-', 'K.M.', '7', 'null' gibi doldurma değerlerini isim saymaz.
+
+    OCR bir harfi rakam okuyabildiği için (RAMA2AN) rakam içeren metinler
+    tümden elenmez; en az üç harf olması ve doldurma sözcüğü olmaması yeter.
+    """
+    metin = (metin or "").strip()
+    if len(metin) < 3 or sum(c.isalpha() for c in metin) < 3:
+        return False
+    return _ekipman_anahtari(metin).replace(" ", "") not in {
+        a.replace(" ", "") for a in ISIM_OLMAYANLAR
+    }
+
+
 def esle(ham: dict) -> dict:
     """Ham (harfi harfine okunmuş) alanları, 'plaka' ve 'ad_soyad' anlamlarına
     eşler. Bazı fişlerde yakıt bir araca değil sabit bir ekipmana (kazık
     makinesi, jeneratör vb.) verilir; bu durumda fişi dolduran kişi
-    'Araç Plakası' alanına bir KİŞİ İSMİ, 'Adı Soyadı' alanına da ekipman
-    türünü yazar. Gerçek bir Türkçe plaka her zaman rakam içerir — bu yüzden
-    'Araç Plakası' alanında hiç rakam yoksa bunu ekipman durumu olarak kabul
-    edip alanları buna göre takas ediyoruz. Bu mantık modele değil, koda
-    ait: aynı kural her fişte birebir aynı şekilde, hatasız uygulanır."""
+    'Araç Plakası' alanına bazen ekipman adını, bazen de kişi ismini yazar;
+    kalan hücreye de diğerini yazar. Gerçek bir Türkçe plaka her zaman rakam
+    içerir — bu yüzden 'Araç Plakası' alanında hiç rakam yoksa bunu ekipman
+    durumu olarak kabul ediyoruz. Hangi hücrenin ekipman olduğunu yerine göre
+    değil İÇERİĞE bakarak buluyoruz: ekipman adı 'plaka' alanına, kişi ismi
+    'ad_soyad' alanına gider. İki taraf da ekipman sözlüğüne uymazsa fişte
+    yazdığı gibi bırakılır. Bu mantık modele değil, koda ait: aynı kural her
+    fişte birebir aynı şekilde uygulanır."""
     arac = (ham.get("arac_plakasi_alani") or "").strip()
     kisi = (ham.get("adi_soyadi_alani") or "").strip()
     km_ham = (ham.get("km_alani") or "").strip()
 
-    ekipman_durumu = bool(arac) and not any(c.isdigit() for c in arac)
+    # Gerçek plakada her zaman rakam vardır; ama OCR ekipman adındaki harfleri
+    # rakam olarak okuyabiliyor (KAZIK MAK -> KA21K MAK). Bu yüzden plaka
+    # kalıbına uymayan ve ekipman sözlüğüne uyan metinler de ekipman sayılır.
+    ekipman_durumu = bool(arac) and (
+        not any(c.isdigit() for c in arac)
+        or (not _plaka_gibi(arac) and ekipman_puani(arac) >= EKIPMAN_ESIGI)
+    )
 
     if ekipman_durumu:
-        plaka = kisi or None
-        isimler = [p for p in (arac, km_ham) if p and not any(c.isdigit() for c in p)]
+        arac_puani = ekipman_puani(arac)
+        kisi_puani = ekipman_puani(kisi)
+        if max(arac_puani, kisi_puani) < EKIPMAN_ESIGI or arac_puani >= kisi_puani:
+            # Ekipman 'Araç Plakası' hücresinde ya da karar verilemiyor:
+            # fişte yazdığı gibi bırak.
+            ekipman_metni, kisi_metni = arac, kisi
+        else:
+            # Ekipman 'Adı Soyadı' hücresine yazılmış: hücreleri takas et.
+            ekipman_metni, kisi_metni = kisi, arac
+        plaka = ekipman_metni or None
+        isimler = [p for p in (kisi_metni, km_ham) if _isim_gibi(p)]
         ad_soyad = " - ".join(isimler) if isimler else None
         km = km_ham if km_ham and any(c.isdigit() for c in km_ham) else None
     else:

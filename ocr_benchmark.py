@@ -16,15 +16,15 @@ ROOT = Path(__file__).resolve().parent
 FIELDS = ("fis_no", "tarih", "firma", "plaka", "ad_soyad", "km", "litre")
 
 
-def image_index() -> dict[str, Path]:
+def image_index(images_dir: Path) -> dict[str, Path]:
     return {
-        yol.name: yol for yol in (ROOT / "fisler").rglob("*")
+        yol.name: yol for yol in images_dir.rglob("*")
         if yol.is_file() and yol.suffix.lower() in IMG_EXT
     }
 
 
-def select_sample(limit: int) -> list[dict]:
-    rows = json.loads((ROOT / "sonuclar.json").read_text(encoding="utf-8"))
+def select_sample(limit: int, data_file: Path) -> list[dict]:
+    rows = json.loads(data_file.read_text(encoding="utf-8"))
     rows = [
         r for r in rows if r.get("_onaylandi") and r.get("_ham")
         and not r.get("_silindi")
@@ -44,9 +44,14 @@ def same(left, right) -> bool:
     return arama_anahtari(left) == arama_anahtari(right)
 
 
-def run(model: str, max_edge: int, limit: int) -> dict:
-    images = image_index()
-    sample = select_sample(limit)
+def run(
+    model: str, max_edge: int, limit: int,
+    data_file: Path | None = None, images_dir: Path | None = None,
+) -> dict:
+    data_file = data_file or ROOT / "sonuclar.json"
+    images_dir = images_dir or ROOT / "fisler"
+    images = image_index(images_dir)
+    sample = select_sample(limit, data_file)
     results = []
     started = time.perf_counter()
     for number, truth in enumerate(sample, 1):
@@ -91,8 +96,13 @@ def main() -> None:
     parser.add_argument("--max-kenar", type=int, default=1600)
     parser.add_argument("--ornek", type=int, default=8)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--data-file", type=Path, default=ROOT / "sonuclar.json")
+    parser.add_argument("--images-dir", type=Path, default=ROOT / "fisler")
     args = parser.parse_args()
-    report = run(args.model, args.max_kenar, args.ornek)
+    report = run(
+        args.model, args.max_kenar, args.ornek,
+        data_file=args.data_file, images_dir=args.images_dir,
+    )
     output = args.output or ROOT / "benchmark_sonucu.json"
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({k: v for k, v in report.items() if k != "sonuclar"}, ensure_ascii=False, indent=2))

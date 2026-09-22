@@ -3,6 +3,9 @@ const FIELD_LABELS = { firma: "Firma", plaka: "Plaka", ad_soyad: "Ad Soyad" };
 
 const state = {
   receipts: [],
+  parties: [],
+  partyId: "aktif",
+  readOnly: false,
   selectedFilename: null,
   filter: "all",
   query: "",
@@ -15,14 +18,48 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const form = $("#receiptForm");
 
+async function loadParties({ keepSelection = true } = {}) {
+  const response = await fetch("/api/partiler", { cache: "no-store" });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "Partiler yüklenemedi");
+  state.parties = data.partiler || [];
+  if (!keepSelection || !state.parties.some((party) => party.id === state.partyId)) {
+    state.partyId = "aktif";
+  }
+  const select = $("#partySelect");
+  select.innerHTML = "";
+  state.parties.forEach((party) => {
+    const option = document.createElement("option");
+    option.value = party.id;
+    option.textContent = `${party.aktif ? "● " : ""}${party.ad} (${party.toplam})`;
+    select.appendChild(option);
+  });
+  select.value = state.partyId;
+  renderPartyStatus();
+}
+
+function selectedParty() {
+  return state.parties.find((party) => party.id === state.partyId) || null;
+}
+
+function renderPartyStatus() {
+  const party = selectedParty();
+  if (!party) return;
+  $(".party-panel").classList.toggle("archive", !party.aktif);
+  $("#partyStatus").textContent = party.aktif
+    ? `${party.onayli}/${party.toplam} onaylı · yeni yüklemeler bu partiye gelir`
+    : `Arşiv · ${party.onayli}/${party.toplam} onaylı · Excel ${party.excel_aktarilan}/${party.toplam}`;
+}
+
 async function loadReceipts({ keepSelection = true, announce = false } = {}) {
   setBusy($("#reloadButton"), true);
   try {
-    const response = await fetch("/api/receipts", { cache: "no-store" });
+    const response = await fetch(`/api/receipts?parti=${encodeURIComponent(state.partyId)}`, { cache: "no-store" });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Sonuçlar yüklenemedi");
     state.receipts = data.receipts || [];
     state.modified = data.modified;
+    state.readOnly = Boolean(data.salt_okunur);
 
     if (!keepSelection || !state.receipts.some((r) => r._dosya === state.selectedFilename)) {
       const firstPending = state.receipts.find((r) => !r._onaylandi);
@@ -53,6 +90,15 @@ function renderAll() {
   renderCounts();
   renderList();
   renderReceipt();
+  renderPartyStatus();
+  $("#review").classList.toggle("readonly-party", state.readOnly);
+  FIELDS.forEach((field) => { form.elements[field].disabled = state.readOnly; });
+  $("#saveButton").classList.toggle("hidden", state.readOnly);
+  $("#approveButton").classList.toggle("hidden", state.readOnly);
+  $("#deleteButton").classList.toggle("hidden", state.readOnly);
+  $("#exportButton").disabled = false;
+  const captureLink = document.querySelector('a[href="/cek"]');
+  if (captureLink) captureLink.classList.toggle("hidden", state.readOnly);
 }
 
 function renderCounts() {
@@ -107,7 +153,7 @@ function renderReceipt() {
   const image = $("#receiptImage");
   $("#imageError").classList.add("hidden");
   image.classList.remove("hidden");
-  image.src = `/api/image?file=${encodeURIComponent(receipt._dosya || "")}`;
+  image.src = `/api/image?parti=${encodeURIComponent(state.partyId)}&file=${encodeURIComponent(receipt._dosya || "")}`;
   image.alt = `${receipt._dosya || "Fiş"} görseli`;
   resetTransform();
 
@@ -273,7 +319,7 @@ async function openExcelModal() {
   excelError("");
   $("#excelPreview").classList.add("hidden");
   try {
-    const response = await fetch("/api/excel/files", { cache: "no-store" });
+    const response = await fetch(`/api/excel/files?parti=${encodeURIComponent(state.partyId)}`, { cache: "no-store" });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Dosyalar listelenemedi");
 
@@ -364,7 +410,7 @@ async function loadExcelPreview() {
   excelError("");
   try {
     const response = await fetch(
-      `/api/excel/preview?dosya=${encodeURIComponent(dosya)}&sayfa=${encodeURIComponent(sayfa)}`
+      `/api/excel/preview?parti=${encodeURIComponent(state.partyId)}&dosya=${encodeURIComponent(dosya)}&sayfa=${encodeURIComponent(sayfa)}&tumu=${$("#excelAll").checked ? 1 : 0}`
     );
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Sayfa okunamadı");
@@ -408,7 +454,10 @@ async function confirmExcelExport() {
     const response = await fetch("/api/export-excel", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dosya, sayfa, baslangic: baslangic || null }),
+      body: JSON.stringify({
+        parti: state.partyId, dosya, sayfa,
+        baslangic: baslangic || null, tumu: $("#excelAll").checked,
+      }),
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Aktarım başarısız");
@@ -418,7 +467,12 @@ async function confirmExcelExport() {
       $("#excelModal").classList.add("hidden");
       loadReceipts();
     } else {
-      excelError("Aktarılacak yeni onaylı fiş yok. Önce fişleri onayla.");
+      excelError(
+        $("#excelAll").checked
+          ? "Bu partide aktarılacak onaylı fiş yok."
+          : "Aktarılacak yeni onaylı fiş yok. Bu fişler daha önce aktarıldıysa "
+            + "“Daha önce aktarılanları da ekle” kutusunu işaretle."
+      );
     }
   } catch (error) {
     excelError(error.message);
@@ -499,7 +553,74 @@ function escapeHtml(value) {
   })[character]);
 }
 
+function partyError(message) {
+  const box = $("#partyError");
+  box.textContent = message || "";
+  box.classList.toggle("hidden", !message);
+}
+
+async function openPartyModal() {
+  const active = state.parties.find((party) => party.aktif);
+  if (!active) return;
+  partyError("");
+  $("#partySummary").innerHTML = `
+    <div><b>${active.toplam}</b><span>TOPLAM FİŞ</span></div>
+    <div><b>${active.onayli}</b><span>ONAYLI</span></div>
+    <div><b>${active.bekleyen}</b><span>BEKLEYEN</span></div>`;
+  const now = new Date();
+  $("#newPartyName").value = `${now.toLocaleDateString("tr-TR", { day: "numeric", month: "long" })} Gelen Fişler`;
+  $("#partyModal").classList.remove("hidden");
+  $("#newPartyName").focus();
+}
+
+function closePartyModal() {
+  $("#partyModal").classList.add("hidden");
+  partyError("");
+}
+
+async function createNewParty() {
+  const ad = $("#newPartyName").value.trim();
+  if (!ad) {
+    partyError("Yeni parti için bir ad yaz.");
+    return;
+  }
+  const button = $("#partyConfirm");
+  setBusy(button, true);
+  partyError("");
+  try {
+    const response = await fetch("/api/partiler/yeni", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ad }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Yeni parti açılamadı");
+    state.partyId = "aktif";
+    closePartyModal();
+    await loadParties({ keepSelection: false });
+    await loadReceipts({ keepSelection: false });
+    const count = data.arsivlenen?.toplam || 0;
+    toast(count ? `${count} fiş arşivlendi · Excel'e dokunulmadı` : "Yeni boş parti açıldı");
+  } catch (error) {
+    partyError(error.message);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
 $("#reloadButton").addEventListener("click", () => loadReceipts({ announce: true }));
+$("#partySelect").addEventListener("change", async (event) => {
+  state.partyId = event.target.value;
+  state.selectedFilename = null;
+  await loadReceipts({ keepSelection: false });
+});
+$("#newPartyButton").addEventListener("click", openPartyModal);
+$("#partyClose").addEventListener("click", closePartyModal);
+$("#partyCancel").addEventListener("click", closePartyModal);
+$("#partyConfirm").addEventListener("click", createNewParty);
+$("#partyModal").addEventListener("click", (event) => {
+  if (event.target === $("#partyModal")) closePartyModal();
+});
 $("#searchInput").addEventListener("input", (event) => { state.query = event.target.value; renderList(); });
 $$('.filter').forEach((button) => button.addEventListener("click", () => {
   state.filter = button.dataset.filter;
@@ -528,6 +649,7 @@ $("#deleteButton").addEventListener("click", deleteCurrent);
 $("#exportButton").addEventListener("click", openExcelModal);
 $("#excelFile").addEventListener("change", () => loadExcelSheets());
 $("#excelSheet").addEventListener("change", loadExcelPreview);
+$("#excelAll").addEventListener("change", loadExcelPreview);
 $("#excelConfirm").addEventListener("click", confirmExcelExport);
 $("#excelLearn").addEventListener("click", learnFromExcel);
 $("#applyAllSuggestions").addEventListener("click", applyAllSuggestions);
@@ -569,4 +691,13 @@ $("#imageStage").addEventListener("pointermove", (event) => {
 });
 $("#imageStage").addEventListener("pointerup", () => { state.dragging = null; $("#imageStage").classList.remove("dragging"); });
 
-loadReceipts({ keepSelection: false });
+async function initialize() {
+  try {
+    await loadParties({ keepSelection: false });
+    await loadReceipts({ keepSelection: false });
+  } catch (error) {
+    toast(error.message, true);
+  }
+}
+
+initialize();

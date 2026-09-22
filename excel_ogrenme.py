@@ -14,11 +14,13 @@ import unicodedata
 import uuid
 from collections import Counter
 from datetime import datetime
-from difflib import SequenceMatcher
 from functools import lru_cache
 from pathlib import Path
 
 from openpyxl import load_workbook
+from rapidfuzz import fuzz
+
+from normalizasyon import bos_degeri_duzelt, firmayi_duzelt, plakayi_duzelt
 
 
 ROOT = Path(__file__).resolve().parent
@@ -26,7 +28,7 @@ REFERANS_FILE = ROOT / "excel_referans.json"
 KULLANICI_FILE = ROOT / "kullanici_ogrenmeleri.json"
 ALAN_SUTUNLARI = {"firma": 3, "plaka": 4, "ad_soyad": 5}
 ESIKLER = {"firma": 68, "plaka": 72, "ad_soyad": 70}
-GECERSIZ_METINLER = {"", "-", "—", "NONE", "NULL"}
+GECERSIZ_METINLER = {"", "-", "—", "NONE", "NULL", "SAYIN", "SAYIN:", "SAYIN :"}
 
 
 @lru_cache(maxsize=4096)
@@ -203,52 +205,225 @@ def referans_yukle() -> dict | None:
     try:
         veri = json.loads(REFERANS_FILE.read_text(encoding="utf-8"))
         return _kaynaklari_birlestir(_kaynaklari_cikar(veri))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, ValueError):
         return None
 
 
 def _kullanici_yukle() -> dict:
     if not KULLANICI_FILE.exists():
-        return {"surum": 1, "alanlar": {alan: [] for alan in ALAN_SUTUNLARI}}
+        return {
+            "surum": 2,
+            "alanlar": {alan: [] for alan in ALAN_SUTUNLARI},
+            "eslesmeler": {alan: [] for alan in ALAN_SUTUNLARI},
+        }
     try:
         veri = json.loads(KULLANICI_FILE.read_text(encoding="utf-8"))
-        return veri if isinstance(veri, dict) else {"surum": 1, "alanlar": {}}
+        if not isinstance(veri, dict):
+            raise ValueError("gecersiz kullanici ogrenme dosyasi")
+        veri.setdefault("alanlar", {})
+        veri.setdefault("eslesmeler", {})
+        return veri
     except (OSError, json.JSONDecodeError):
-        return {"surum": 1, "alanlar": {}}
+        return {
+            "surum": 2,
+            "alanlar": {alan: [] for alan in ALAN_SUTUNLARI},
+            "eslesmeler": {alan: [] for alan in ALAN_SUTUNLARI},
+        }
 
 
-def duzeltmelerden_ogren(kayit: dict, degisen_alanlar) -> int:
-    """Kullanıcının gerçekten değiştirdiği metin değerlerini yerel sözlüğe ekler."""
+def _bilinen_gecerli_deger(veri: dict, alan: str, deger: str, esik: int = 2) -> bool:
+    """Kullanıcının başka fişlerde defalarca onayladığı gerçek bir değer mi?
+
+    Böyle bir değer OCR hatası sayılamaz; onu bir başka değere çeviren kural
+    öğrenilmemeli ve uygulanmamalıdır (ör. gerçekten Selim İnşaat yazan fiş).
+    """
+    anahtar = arama_anahtari(deger)
+    for oge in veri.get("alanlar", {}).get(alan, []):
+        if arama_anahtari(oge.get("deger")) == anahtar:
+            return int(oge.get("adet", 0)) >= esik
+    return False
+
+
+def duzeltmelerden_ogren(
+    kayit: dict,
+    degisen_alanlar,
+    onceki_degerler: dict | None = None,
+    sadece_eslesme: bool = False,
+) -> int:
+    """Kullanıcının düzeltmesini hem doğru değer hem yanlış→doğru kuralı olarak öğrenir."""
     alanlar = set(degisen_alanlar) & set(ALAN_SUTUNLARI)
     if not alanlar:
         return 0
     veri = _kullanici_yukle()
+    veri["surum"] = 2
     veri.setdefault("alanlar", {})
+    veri.setdefault("eslesmeler", {})
     eklenen = 0
+    degisti = False
     for alan in alanlar:
+        alan_degisti = False
         deger = str(kayit.get(alan) or "").strip()
         if not _anlamli(deger, alan):
             continue
-        liste = veri["alanlar"].setdefault(alan, [])
-        anahtar = arama_anahtari(deger)
-        mevcut = next(
-            (oge for oge in liste if arama_anahtari(oge.get("deger")) == anahtar),
-            None,
-        )
-        if mevcut:
-            mevcut["deger"] = deger
-            mevcut["adet"] = int(mevcut.get("adet", 0)) + 1
-        else:
-            liste.append({"deger": deger, "adet": 1})
-        eklenen += 1
+        if not sadece_eslesme:
+            liste = veri["alanlar"].setdefault(alan, [])
+            anahtar = arama_anahtari(deger)
+            mevcut = next(
+                (oge for oge in liste if arama_anahtari(oge.get("deger")) == anahtar),
+                None,
+            )
+            if mevcut:
+                mevcut["deger"] = deger
+                mevcut["adet"] = int(mevcut.get("adet", 0)) + 1
+            else:
+                liste.append({"deger": deger, "adet": 1})
+            degisti = True
+            alan_degisti = True
 
-    if eklenen:
+        onceki = str((onceki_degerler or {}).get(alan) or "").strip()
+        if (
+            _anlamli(onceki, alan)
+            and arama_anahtari(onceki) != arama_anahtari(deger)
+            and not _bilinen_gecerli_deger(veri, alan, onceki)
+        ):
+            eslesmeler = veri["eslesmeler"].setdefault(alan, [])
+            eslesme = next(
+                (
+                    oge for oge in eslesmeler
+                    if arama_anahtari(oge.get("yanlis")) == arama_anahtari(onceki)
+                    and arama_anahtari(oge.get("dogru")) == arama_anahtari(deger)
+                ),
+                None,
+            )
+            if eslesme:
+                eslesme["yanlis"] = onceki
+                eslesme["dogru"] = deger
+                eslesme["adet"] = int(eslesme.get("adet", 0)) + 1
+            else:
+                eslesmeler.append({"yanlis": onceki, "dogru": deger, "adet": 1})
+            degisti = True
+            alan_degisti = True
+
+        if alan_degisti:
+            eklenen += 1
+
+    if degisti:
         veri["guncelleme_zamani"] = datetime.now().isoformat(timespec="seconds")
         gecici = KULLANICI_FILE.with_name(f".{KULLANICI_FILE.name}.{uuid.uuid4().hex}.tmp")
         gecici.write_text(json.dumps(veri, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(gecici, KULLANICI_FILE)
         birlesik_referans_yukle.cache_clear()
     return eklenen
+
+
+def gecmis_duzeltmelerden_eslesme_ogren(kayitlar: list[dict]) -> int:
+    """Onaylanmış eski kayıtların ham OCR sonucundan düzeltme eşleşmeleri çıkarır.
+
+    Her kayıt dosya karması/yükleme kimliği ile yalnız bir kez işlenir. Böylece
+    uygulama yeniden başlatıldığında öğrenme adetleri yapay biçimde artmaz.
+    """
+    veri = _kullanici_yukle()
+    veri["surum"] = 2
+    veri.setdefault("alanlar", {})
+    veri.setdefault("eslesmeler", {})
+    islenenler = set(veri.setdefault("eslesme_kaynaklari", []))
+    yeni_kaynaklar = []
+    eklenen = 0
+
+    # Daha önce kaydedilmiş riskli kuralları (gerçek bir değeri başka bir
+    # değere çeviren kurallar) temizle.
+    temizlendi = False
+    for alan, eslesmeler in veri["eslesmeler"].items():
+        guvenli = [
+            oge for oge in eslesmeler
+            if not _bilinen_gecerli_deger(veri, alan, str(oge.get("yanlis") or ""))
+        ]
+        if len(guvenli) != len(eslesmeler):
+            veri["eslesmeler"][alan] = guvenli
+            temizlendi = True
+
+    for kayit in kayitlar:
+        if not (kayit.get("_onaylandi") and kayit.get("_duzeltildi")):
+            continue
+        kaynak = str(
+            kayit.get("_dosya_hash") or kayit.get("_yukleme_id")
+            or kayit.get("_dosya") or ""
+        ).strip()
+        if not kaynak or kaynak in islenenler:
+            continue
+        ham = kayit.get("_ham")
+        if not isinstance(ham, dict):
+            continue
+
+        ham_firma = ham.get("sayin_alani")
+        if str(ham_firma or "").strip().upper() in GECERSIZ_METINLER:
+            ham_firma = None
+        onceki = {
+            "firma": firmayi_duzelt(ham_firma),
+            "plaka": plakayi_duzelt(
+                ham.get("arac_plakasi_alani"), bool(kayit.get("_ekipman_durumu"))
+            ),
+            "ad_soyad": bos_degeri_duzelt(ham.get("adi_soyadi_alani")),
+        }
+        degisen = {
+            alan for alan in ALAN_SUTUNLARI
+            if _anlamli(kayit.get(alan), alan)
+            and _anlamli(onceki.get(alan), alan)
+            and arama_anahtari(kayit.get(alan)) != arama_anahtari(onceki.get(alan))
+        }
+        for alan in degisen:
+            yanlis = str(onceki[alan]).strip()
+            dogru = str(kayit[alan]).strip()
+            if _bilinen_gecerli_deger(veri, alan, yanlis):
+                continue
+            eslesmeler = veri["eslesmeler"].setdefault(alan, [])
+            eslesme = next(
+                (
+                    oge for oge in eslesmeler
+                    if arama_anahtari(oge.get("yanlis")) == arama_anahtari(yanlis)
+                    and arama_anahtari(oge.get("dogru")) == arama_anahtari(dogru)
+                ),
+                None,
+            )
+            if eslesme:
+                eslesme["adet"] = int(eslesme.get("adet", 0)) + 1
+            else:
+                eslesmeler.append({"yanlis": yanlis, "dogru": dogru, "adet": 1})
+            eklenen += 1
+
+        islenenler.add(kaynak)
+        yeni_kaynaklar.append(kaynak)
+
+    if yeni_kaynaklar or temizlendi:
+        veri["eslesme_kaynaklari"] = sorted(islenenler)
+        veri["guncelleme_zamani"] = datetime.now().isoformat(timespec="seconds")
+        gecici = KULLANICI_FILE.with_name(f".{KULLANICI_FILE.name}.{uuid.uuid4().hex}.tmp")
+        gecici.write_text(json.dumps(veri, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(gecici, KULLANICI_FILE)
+        birlesik_referans_yukle.cache_clear()
+    return eklenen
+
+
+def _kesin_kullanici_eslesmesi(kullanici: dict, alan: str, mevcut: str) -> dict | None:
+    """Aynı OCR yanlışı için en güçlü ve çelişkisiz kullanıcı düzeltmesini bulur."""
+    anahtar = arama_anahtari(mevcut)
+    adaylar = [
+        oge for oge in kullanici.get("eslesmeler", {}).get(alan, [])
+        if arama_anahtari(oge.get("yanlis")) == anahtar
+    ]
+    adaylar.sort(key=lambda oge: -int(oge.get("adet", 0)))
+    if not adaylar:
+        return None
+    if _bilinen_gecerli_deger(kullanici, alan, mevcut):
+        return None
+    if len(adaylar) > 1:
+        birinci = int(adaylar[0].get("adet", 0))
+        ikinci = int(adaylar[1].get("adet", 0))
+        # Aynı OCR metni için birden çok doğru öneriliyorsa ancak açık ara
+        # üstün ve tekrarlanmış kural uygulanır.
+        if birinci < 2 or birinci < ikinci * 2:
+            return None
+    return adaylar[0]
 
 
 @lru_cache(maxsize=1)
@@ -293,9 +468,29 @@ def benzerlik(a, b) -> int:
     sol, sag = arama_anahtari(a), arama_anahtari(b)
     if not sol or not sag:
         return 0
-    bitisik = SequenceMatcher(None, sol.replace(" ", ""), sag.replace(" ", "")).ratio()
-    kelimeler = SequenceMatcher(None, " ".join(sorted(sol.split())), " ".join(sorted(sag.split()))).ratio()
-    return round(max(bitisik, kelimeler) * 100)
+    return round(fuzz.WRatio(sol, sag))
+
+
+def _fazladan_kelime_var_mi(mevcut: str, aday: str) -> bool:
+    """Adayda, mevcut değerde hiç karşılığı olmayan fazladan sözcük var mı?
+
+    'RT 650' ile 'RT 650 SARI VİNÇ' benzerlik puanında yüksek çıkar; oysa
+    aradaki fark bir OCR hatası değil, fazladan yazılmış sözcüklerdir. Böyle
+    adaylar otomatik uygulanmaz, yalnız öneri olarak gösterilir. Sözcük sayısı
+    aynıysa fark harf düzeyindedir (ATV/DTV) ve bu kural devreye girmez;
+    '34' gibi kısa il kodu eklemeleri de kuralın dışındadır.
+    """
+    sol = arama_anahtari(mevcut).split()
+    sag = arama_anahtari(aday).split()
+    if len(sol) == len(sag):
+        return False
+    uzun, kisa = (sol, sag) if len(sol) > len(sag) else (sag, sol)
+    for kelime in uzun:
+        if sum(c.isalpha() for c in kelime) < 3:
+            continue
+        if not any(benzerlik(kelime, diger) >= 80 for diger in kisa):
+            return True
+    return False
 
 
 def kayit_onerileri(kayit: dict) -> dict | None:
@@ -345,10 +540,90 @@ def kayit_onerileri(kayit: dict) -> dict | None:
     }
 
 
+def guvenli_otomatik_duzelt(kayit: dict) -> int:
+    """Geçmişe dayanarak yalnız çok yüksek güvenli metin düzeltmelerini uygular.
+
+    Aynı arama anahtarına inen Türkçe karakter/case varyantları risksiz biçimde
+    kanonikleştirilir. Yakın eşleşmelerde ise alan bazlı yüksek eşik ve geçmişte
+    en az iki kullanım şartı aranır. Tüm değişiklikler denetim için kayda yazılır.
+    """
+    referans = birlesik_referans_yukle()
+    if not referans:
+        return 0
+
+    degisiklikler = []
+    kullanici = _kullanici_yukle()
+    yakin_esikler = {"firma": 95, "plaka": 88, "ad_soyad": 95}
+    for alan in ALAN_SUTUNLARI:
+        mevcut = str(kayit.get(alan) or "").strip()
+        if not _anlamli(mevcut, alan):
+            continue
+
+        kesin = _kesin_kullanici_eslesmesi(kullanici, alan, mevcut)
+        if kesin:
+            yeni = str(kesin.get("dogru") or "").strip()
+            if yeni and yeni != mevcut:
+                kayit[alan] = yeni
+                degisiklikler.append({
+                    "alan": alan, "eski": mevcut, "yeni": yeni,
+                    "benzerlik": 100,
+                    "neden": f"kullanıcı düzeltmesi ({int(kesin.get('adet', 0))} kez)",
+                })
+            continue
+
+        adaylar = referans.get("alanlar", {}).get(alan, [])
+        mevcut_anahtar = arama_anahtari(mevcut)
+
+        ayni = [a for a in adaylar if arama_anahtari(a.get("deger")) == mevcut_anahtar]
+        if ayni:
+            aday = max(
+                ayni,
+                key=lambda a: (int(a.get("kullanici_adet", 0)), int(a.get("adet", 0))),
+            )
+            yeni = str(aday.get("deger") or "").strip()
+            if yeni and yeni != mevcut:
+                kayit[alan] = yeni
+                degisiklikler.append({
+                    "alan": alan, "eski": mevcut, "yeni": yeni,
+                    "benzerlik": 100, "neden": "geçmişteki kanonik yazım",
+                })
+            continue
+
+        puanli = sorted(
+            ((benzerlik(mevcut, a.get("deger")), a) for a in adaylar),
+            key=lambda x: (-x[0], -int(x[1].get("kullanici_adet", 0)), -int(x[1].get("adet", 0))),
+        )
+        if not puanli:
+            continue
+        puan, aday = puanli[0]
+        ikinci = puanli[1][0] if len(puanli) > 1 else 0
+        gecmis = int(aday.get("adet", 0))
+        if puan < yakin_esikler[alan] or gecmis < 2 or puan - ikinci < 5:
+            continue
+        if _fazladan_kelime_var_mi(mevcut, aday.get("deger")):
+            continue
+        yeni = str(aday.get("deger") or "").strip()
+        if yeni and yeni != mevcut:
+            kayit[alan] = yeni
+            degisiklikler.append({
+                "alan": alan, "eski": mevcut, "yeni": yeni,
+                "benzerlik": puan, "neden": f"geçmişte {gecmis} kullanım",
+            })
+
+    if degisiklikler:
+        kayit["_otomatik_duzeltmeler"] = degisiklikler
+        kayit["_otomatik_duzeltildi"] = True
+    return len(degisiklikler)
+
+
 def durum() -> dict:
     referans = birlesik_referans_yukle()
     if not referans:
         return {"hazir": False}
+    kullanici = _kullanici_yukle()
+    eslesme_sayisi = sum(
+        len(liste) for liste in kullanici.get("eslesmeler", {}).values()
+    )
     return {
         "hazir": True,
         "kaynak": referans.get("kaynak_adi"),
@@ -362,6 +637,7 @@ def durum() -> dict:
         ],
         "ogrenme_zamani": referans.get("ogrenme_zamani"),
         "kullanici_duzeltme_sayisi": referans.get("kullanici_duzeltme_sayisi", 0),
+        "kullanici_eslesme_sayisi": eslesme_sayisi,
         "deger_sayilari": {
             alan: len(degerler)
             for alan, degerler in referans.get("alanlar", {}).items()

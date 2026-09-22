@@ -32,6 +32,7 @@ from dogrulama import kaydi_dogrula  # noqa: E402
 from normalizasyon import fis_normalize_et  # noqa: E402
 import excel_aktar  # noqa: E402
 import excel_ogrenme  # noqa: E402
+import parti_yonetimi  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
 UI_DIR = ROOT / "ui"
@@ -59,16 +60,20 @@ def lan_ip() -> str:
         s.close()
 
 
-def load_receipts() -> list[dict]:
-    if not DATA_FILE.exists():
+def load_receipts_from(data_file: Path) -> list[dict]:
+    if not data_file.exists():
         return []
     try:
-        data = json.loads(DATA_FILE.read_text(encoding="utf-8"))
+        data = json.loads(data_file.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
         raise ValueError(f"sonuclar.json okunamadı: {exc}") from exc
     if not isinstance(data, list):
         raise ValueError("sonuclar.json bir liste içermeli")
     return [kaydi_dogrula(fis_normalize_et(receipt)) for receipt in data]
+
+
+def load_receipts() -> list[dict]:
+    return load_receipts_from(DATA_FILE)
 
 
 def save_receipts(receipts: list[dict]) -> None:
@@ -156,6 +161,33 @@ def benzersiz_hedef(klasor: Path, taban: str, ext: str) -> Path:
     return aday
 
 
+def kullanilan_dosya_adlari(kayitlar: list[dict] | None = None) -> set[str]:
+    """Kayıtlarda ve görsel klasörlerinde geçen tüm dosya adları.
+
+    Onaylanan fişler firma klasörüne taşındığı için tek bir klasöre bakmak
+    yetmez; aynı fiş numarasına sahip ikinci fiş aynı adı almamalı.
+    """
+    adlar = {str(k.get("_dosya")) for k in (kayitlar or []) if k.get("_dosya")}
+    if FISLER_DIR.exists():
+        adlar.update(
+            yol.name for yol in FISLER_DIR.rglob("*")
+            if yol.is_file() and yol.suffix.lower() in IMAGE_EXTENSIONS
+        )
+    return adlar
+
+
+def benzersiz_kayit_adi(klasor: Path, taban: str, ext: str,
+                        kayitlar: list[dict] | None = None) -> Path:
+    """Hiçbir kayıtta ve hiçbir klasörde kullanılmayan bir dosya adı üretir."""
+    kullanilan = kullanilan_dosya_adlari(kayitlar)
+    aday = klasor / f"{taban}{ext}"
+    sayac = 2
+    while aday.exists() or aday.name in kullanilan:
+        aday = klasor / f"{taban}_{sayac}{ext}"
+        sayac += 1
+    return aday
+
+
 def dosya_hashi(path: Path) -> str:
     ozet = hashlib.sha256()
     with path.open("rb") as file:
@@ -194,13 +226,21 @@ def ocr_worker() -> None:
                     "_kontrol_nedeni": "işleme hatası",
                 })
 
+            if not record.get("HATA"):
+                excel_ogrenme.guvenli_otomatik_duzelt(record)
+                kaydi_dogrula(fis_normalize_et(record))
+
             # OCR başarılıysa fiş no ile adlandırma kuralını koru (hâlâ temp/'te).
             if not record.get("HATA"):
                 fis_no = guvenli_fis_no(record.get("fis_no"))
                 if fis_no:
                     try:
-                        yeni_hedef = benzersiz_hedef(
-                            temp_dir(), fis_no, image_path.suffix.lower()
+                        with DATA_LOCK:
+                            mevcut_kayitlar = load_receipts()
+                        yeni_hedef = benzersiz_kayit_adi(
+                            temp_dir(), fis_no, image_path.suffix.lower(),
+                            [k for k in mevcut_kayitlar
+                             if k.get("_dosya") != original_name],
                         )
                         image_path.rename(yeni_hedef)
                         image_path = yeni_hedef
@@ -245,17 +285,20 @@ def ocr_worker() -> None:
             OCR_QUEUE.task_done()
 
 
-def find_image(filename: str) -> Path | None:
-    """Yalnızca proje kökü altındaki, adı tam eşleşen görselleri döndürür."""
+def find_image(filename: str, images_dir: Path | None = None) -> Path | None:
+    """Seçilen partinin görsel klasöründe adı tam eşleşen dosyayı döndürür."""
     safe_name = Path(filename).name
     if not safe_name or safe_name != filename:
         return None
 
-    direct = ROOT / safe_name
+    images_dir = images_dir or FISLER_DIR
+    direct = images_dir / safe_name
     if direct.is_file() and direct.suffix.lower() in IMAGE_EXTENSIONS:
         return direct
 
-    for path in ROOT.rglob(safe_name):
+    if not images_dir.is_dir():
+        return None
+    for path in images_dir.rglob(safe_name):
         if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
             return path
     return None
@@ -283,25 +326,41 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
 
+        if parsed.path == "/api/partiler":
+            self.send_json({"partiler": parti_yonetimi.partileri_listele()})
+            return
+
         if parsed.path == "/api/receipts":
             try:
+                parti_id = parse_qs(parsed.query).get("parti", ["aktif"])[0]
+                data_file, _, salt_okunur = parti_yonetimi.parti_yollari(parti_id)
                 with DATA_LOCK:
-                    receipts = [r for r in load_receipts() if not r.get("_silindi")]
+                    receipts = [r for r in load_receipts_from(data_file) if not r.get("_silindi")]
                     for receipt in receipts:
                         receipt["_excel_onerileri"] = excel_ogrenme.kayit_onerileri(receipt)
                     modified = (
-                        datetime.fromtimestamp(DATA_FILE.stat().st_mtime).isoformat()
-                        if DATA_FILE.exists()
+                        datetime.fromtimestamp(data_file.stat().st_mtime).isoformat()
+                        if data_file.exists()
                         else None
                     )
-                self.send_json({"receipts": receipts, "modified": modified})
-            except ValueError as exc:
+                self.send_json({
+                    "receipts": receipts, "modified": modified,
+                    "parti": parti_id, "salt_okunur": salt_okunur,
+                })
+            except (ValueError, LookupError) as exc:
                 self.send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
 
         if parsed.path == "/api/image":
-            filename = parse_qs(parsed.query).get("file", [""])[0]
-            image_path = find_image(unquote(filename))
+            query = parse_qs(parsed.query)
+            filename = query.get("file", [""])[0]
+            parti_id = query.get("parti", ["aktif"])[0]
+            try:
+                _, images_dir, _ = parti_yonetimi.parti_yollari(parti_id)
+            except LookupError:
+                self.send_json({"error": "Parti bulunamadı"}, HTTPStatus.NOT_FOUND)
+                return
+            image_path = find_image(unquote(filename), images_dir)
             if not image_path:
                 self.send_json({"error": "Görsel bulunamadı"}, HTTPStatus.NOT_FOUND)
                 return
@@ -318,7 +377,9 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
 
         if parsed.path == "/api/excel/files":
             try:
-                excel_aktar.DATA_FILE = DATA_FILE
+                parti_id = parse_qs(parsed.query).get("parti", ["aktif"])[0]
+                data_file, _, _ = parti_yonetimi.parti_yollari(parti_id)
+                excel_aktar.DATA_FILE = data_file
                 self.send_json({
                     "dosyalar": excel_aktar.excel_dosyalarini_bul(),
                     "son_ayar": excel_aktar.son_ayar(),
@@ -344,13 +405,20 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
             query = parse_qs(parsed.query)
             dosya = unquote(query.get("dosya", [""])[0])
             sayfa = unquote(query.get("sayfa", [""])[0])
+            parti_id = query.get("parti", ["aktif"])[0]
             try:
                 yol = Path(dosya)
                 if not excel_aktar.yol_guvenli_mi(yol):
                     raise ValueError("Bu dosyaya erişim izni yok")
-                excel_aktar.DATA_FILE = DATA_FILE
+                data_file, _, _ = parti_yonetimi.parti_yollari(parti_id)
+                excel_aktar.DATA_FILE = data_file
+                tumu = query.get("tumu", ["0"])[0] in ("1", "true", "True")
                 onizleme = excel_aktar.sayfa_onizleme(yol, sayfa)
-                onizleme["bekleyen"] = len(excel_aktar.bekleyen_kayitlar())
+                onizleme["bekleyen"] = len(excel_aktar.bekleyen_kayitlar(tumu=tumu))
+                onizleme["aktarilmis"] = len(
+                    [k for k in excel_aktar.bekleyen_kayitlar(tumu=True)
+                     if k.get("_excel_aktarildi")]
+                )
                 self.send_json(onizleme)
             except Exception as exc:
                 self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
@@ -366,7 +434,9 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path == "/api/save":
+        if path == "/api/partiler/yeni":
+            self.handle_new_batch()
+        elif path == "/api/save":
             self.handle_save()
         elif path == "/api/upload":
             self.handle_upload()
@@ -381,6 +451,36 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
 
+    def handle_new_batch(self) -> None:
+        """Aktif partiyi Excel'e dokunmadan arşivler ve temiz parti açar."""
+        try:
+            payload = self.read_json()
+            ad = payload.get("ad")
+            if not isinstance(ad, str) or not ad.strip():
+                raise ValueError("Yeni parti için bir ad yazılmalı")
+
+            with DATA_LOCK:
+                kayitlar = [k for k in load_receipts() if not k.get("_silindi")]
+                islenen = [k for k in kayitlar if k.get("_isleniyor")]
+                onaysiz = [k for k in kayitlar if not k.get("_onaylandi")]
+                if islenen:
+                    raise ValueError(
+                        f"{len(islenen)} fişin OCR işlemi sürüyor; parti henüz kapatılamaz."
+                    )
+                if onaysiz:
+                    raise ValueError(
+                        f"{len(onaysiz)} fiş henüz onaylanmadı; önce kontrolü tamamla."
+                    )
+
+                sonuc = parti_yonetimi.yeni_parti(ad, None)
+                hash_indeksini_hazirla()
+
+            self.send_json({"ok": True, **sonuc})
+        except (ValueError, json.JSONDecodeError, OSError) as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        except Exception as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
     def handle_save(self) -> None:
         try:
             payload = self.read_json()
@@ -392,12 +492,21 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
 
             with DATA_LOCK:
                 receipts = load_receipts()
-                receipt = next((r for r in receipts if r.get("_dosya") == filename), None)
+                eslesen = [r for r in receipts if r.get("_dosya") == filename]
+                if len(eslesen) > 1:
+                    raise ValueError(
+                        f"'{filename}' adını birden çok fiş kullanıyor; yanlış "
+                        "kaydın üzerine yazmamak için işlem durduruldu."
+                    )
+                receipt = eslesen[0] if eslesen else None
                 if receipt is None:
                     raise LookupError(f"Kayıt bulunamadı: {filename}")
 
                 changed = False
                 changed_fields: set[str] = set()
+                onceki_degerler = {
+                    field: receipt.get(field) for field in EDITABLE_FIELDS
+                }
                 for field in EDITABLE_FIELDS:
                     if field in fields:
                         value = fields[field]
@@ -416,7 +525,7 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
                     firma_klasorune_tasi(receipt)
                 save_receipts(receipts)
                 learned_count = excel_ogrenme.duzeltmelerden_ogren(
-                    receipt, changed_fields
+                    receipt, changed_fields, onceki_degerler
                 )
 
             receipt["_excel_onerileri"] = excel_ogrenme.kayit_onerileri(receipt)
@@ -513,7 +622,13 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
 
             with DATA_LOCK:
                 receipts = load_receipts()
-                receipt = next((r for r in receipts if r.get("_dosya") == filename), None)
+                eslesen = [r for r in receipts if r.get("_dosya") == filename]
+                if len(eslesen) > 1:
+                    raise ValueError(
+                        f"'{filename}' adını birden çok fiş kullanıyor; yanlış "
+                        "kaydın üzerine yazmamak için işlem durduruldu."
+                    )
+                receipt = eslesen[0] if eslesen else None
                 if receipt is None:
                     raise LookupError(f"Kayıt bulunamadı: {filename}")
 
@@ -544,12 +659,17 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
             dosya = payload.get("dosya")
             sayfa = payload.get("sayfa")
             baslangic = payload.get("baslangic")
+            parti_id = payload.get("parti", "aktif")
+            tumu = bool(payload.get("tumu", False))
             if not dosya or not sayfa:
                 raise ValueError("Excel dosyası ve sayfa seçilmeli")
 
             with DATA_LOCK:
-                excel_aktar.DATA_FILE = DATA_FILE
-                sonuc = excel_aktar.aktar(Path(dosya), sayfa, baslangic)
+                data_file, images_dir, salt_okunur = parti_yonetimi.parti_yollari(parti_id)
+                excel_aktar.DATA_FILE = data_file
+                sonuc = excel_aktar.aktar(Path(dosya), sayfa, baslangic, tumu=tumu)
+                if salt_okunur:
+                    parti_yonetimi.arsiv_manifesti_yaz(data_file.parent)
             if "hata" in sonuc:
                 self.send_json({"error": sonuc["hata"]}, HTTPStatus.BAD_REQUEST)
                 return
@@ -641,7 +761,16 @@ def main() -> None:
     DATA_FILE = args.data_file.resolve()
     FISLER_DIR = args.fisler_dir.resolve()
     FISLER_DIR.mkdir(exist_ok=True)
+    parti_yonetimi.yollari_ayarla(ROOT, DATA_FILE, FISLER_DIR)
     hash_indeksini_hazirla()
+    try:
+        ogrenilen_eslesme = excel_ogrenme.gecmis_duzeltmelerden_eslesme_ogren(
+            load_receipts()
+        )
+        if ogrenilen_eslesme:
+            print(f"Geçmiş düzeltmelerden {ogrenilen_eslesme} OCR eşleşmesi öğrenildi.")
+    except (OSError, ValueError) as exc:
+        print(f"Geçmiş düzeltmeler öğrenilemedi: {exc}")
 
     if not UI_DIR.exists():
         raise SystemExit(f"Arayüz klasörü bulunamadı: {UI_DIR}")

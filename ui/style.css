@@ -67,6 +67,14 @@ button { color: inherit; }
 
 .layout { height: calc(100vh - 76px); display: grid; grid-template-columns: 286px 1fr; }
 .sidebar { min-height: 0; display: flex; flex-direction: column; background: var(--paper); border-right: 1px solid var(--line); }
+.party-panel { padding: 13px 16px 12px; border-bottom: 1px solid var(--line); background: #f8faf8; }
+.party-panel > label { display: block; margin-bottom: 6px; color: var(--green-dark); font-size: 9px; font-weight: 900; letter-spacing: 1px; }
+.party-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.party-row select { min-width: 0; height: 36px; padding: 0 7px; border: 1px solid #cfd8d2; border-radius: 8px; color: var(--ink); background: #fff; font-size: 11px; font-weight: 750; }
+.party-row button { height: 36px; padding: 0 9px; border: 0; border-radius: 8px; color: #fff; background: var(--green); cursor: pointer; font-size: 11px; font-weight: 850; }
+.party-panel small { display: block; margin-top: 6px; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; font-size: 9px; }
+.party-panel.archive { background: #fff8e9; }
+.party-panel.archive > label { color: var(--amber); }
 .search { margin: 18px 16px 12px; position: relative; display: flex; align-items: center; }
 .search span { position: absolute; left: 12px; color: var(--muted); font-size: 20px; }
 .search input { width: 100%; height: 40px; padding: 0 12px 0 36px; border: 1px solid var(--line); border-radius: 10px; outline: none; background: #fafbf9; }
@@ -170,6 +178,17 @@ button { color: inherit; }
 .learning-status { color: var(--muted); text-align: center; font-size: 10px; }
 .modal-error { margin: 0; padding: 10px 12px; border-radius: 9px; color: #8a3328; background: #fde4de; font-size: 12px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--line); background: #fbfcfb; }
+.party-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.party-summary div { padding: 11px 8px; border: 1px solid var(--line); border-radius: 10px; background: #f8faf9; text-align: center; }
+.party-summary b, .party-summary span { display: block; }
+.party-summary b { font-size: 18px; }
+.party-summary span { margin-top: 3px; color: var(--muted); font-size: 9px; font-weight: 750; }
+.auto-excel-note { padding: 12px 13px; border: 1px solid #b9d7c8; border-radius: 11px; background: #f1f8f4; }
+.auto-excel-note strong { color: var(--green-dark); font-size: 12px; }
+.auto-excel-note p { margin: 5px 0 7px; color: #4f5d56; font-size: 11px; line-height: 1.45; }
+.auto-excel-note small { color: var(--muted); font-size: 10px; font-weight: 700; }
+.readonly-party #receiptForm input { color: #66736d; background: #f2f4f2; pointer-events: none; }
+.readonly-party .excel-suggestions { display: none !important; }
 .shortcut { margin: 10px 0 0; color: var(--muted); text-align: center; font-size: 10px; }
 kbd { padding: 1px 4px; border: 1px solid #ccd3ce; border-bottom-width: 2px; border-radius: 4px; background: #f7f8f7; font: 10px ui-monospace, monospace; }
 .empty-state { height: 100%; display: grid; align-content: center; justify-items: center; color: var(--muted); text-align: center; }
@@ -195,9 +214,30 @@ kbd { padding: 1px 4px; border: 1px solid #ccd3ce; border-bottom-width: 2px; bor
   .brand p { display: none; }
   .layout { height: auto; display: block; }
   .sidebar { height: 180px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .sidebar { height: 260px; }
   .workspace { height: auto; padding: 10px; }
   .review { display: block; }
   .image-panel { height: 64vh; margin-bottom: 10px; }
   .field-grid { grid-template-columns: 1fr; }
   .field.full { grid-column: auto; }
+}
+
+/* Excel aktarımında "daha önce aktarılanları da ekle" satırı */
+.checkbox-line {
+  cursor: pointer;
+  align-items: flex-start;
+  gap: 12px;
+}
+.checkbox-line span small {
+  display: block;
+  opacity: 0.65;
+  font-size: 11px;
+  margin-top: 2px;
+}
+.checkbox-line input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent, #2f9e6b);
+  cursor: pointer;
+  flex: none;
 }

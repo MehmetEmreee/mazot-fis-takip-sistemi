@@ -17,6 +17,7 @@ import arayuz
 import excel_aktar
 import excel_ogrenme
 import extract_json
+import parti_yonetimi
 
 
 PORT = 8765
@@ -50,6 +51,7 @@ def yollari_ayarla() -> Path:
     excel_ogrenme.KULLANICI_FILE = root / "kullanici_ogrenmeleri.json"
     excel_ogrenme.referans_yukle.cache_clear()
     excel_ogrenme.birlesik_referans_yukle.cache_clear()
+    parti_yonetimi.yollari_ayarla(root, arayuz.DATA_FILE, arayuz.FISLER_DIR)
     return root
 
 

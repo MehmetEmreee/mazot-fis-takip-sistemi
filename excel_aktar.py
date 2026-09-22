@@ -188,11 +188,19 @@ def sayfa_onizleme(xlsx_yolu: Path, sayfa: str) -> dict:
         wb.close()
 
 
-def bekleyen_kayitlar(kayitlar: list[dict] | None = None) -> list[dict]:
+def bekleyen_kayitlar(
+    kayitlar: list[dict] | None = None, tumu: bool = False
+) -> list[dict]:
+    """Aktarılacak onaylı fişler.
+
+    ``tumu=True`` verilirse daha önce Excel'e aktarılmış fişler de listeye
+    girer; yanlış dosyaya aktarıldığında partinin tamamı başka bir deftere
+    yeniden aktarılabilsin diye.
+    """
     kayitlar = yukle_json(DATA_FILE, []) if kayitlar is None else kayitlar
     return [
         k for k in kayitlar
-        if k.get("_onaylandi") and not k.get("_excel_aktarildi")
+        if k.get("_onaylandi") and (tumu or not k.get("_excel_aktarildi"))
         and not k.get("HATA") and not k.get("_silindi")
     ]
 
@@ -235,7 +243,8 @@ def hucre_stilini_kopyala(kaynak_hucre, hedef_hucre) -> None:
     hedef_hucre.number_format = kaynak_hucre.number_format
 
 
-def aktar(xlsx_yolu: Path, sayfa: str, baslangic_satir: int | None = None) -> dict:
+def aktar(xlsx_yolu: Path, sayfa: str, baslangic_satir: int | None = None,
+          tumu: bool = False) -> dict:
     """Onaylı fişleri seçilen dosya/sayfaya ekler. baslangic_satir verilmezse
     son dolu satırın iki altından (bir boşluk bırakarak) başlar."""
     xlsx_yolu = Path(xlsx_yolu)
@@ -245,7 +254,7 @@ def aktar(xlsx_yolu: Path, sayfa: str, baslangic_satir: int | None = None) -> di
         return {"hata": "Bu konuma yazmaya izin yok (yalnızca proje ve Belgeler klasörü)."}
 
     kayitlar = yukle_json(DATA_FILE, [])
-    aktarilacaklar = bekleyen_kayitlar(kayitlar)
+    aktarilacaklar = bekleyen_kayitlar(kayitlar, tumu=tumu)
     if not aktarilacaklar:
         return {"aktarilan": 0, "detay": []}
 
