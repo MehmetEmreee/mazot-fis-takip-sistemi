@@ -139,8 +139,13 @@ def referans_olustur(excel_yolu: Path, sayfa: str) -> dict:
         ws = wb[sayfa]
         _basliklari_dogrula(ws)
         sayaclar = {alan: Counter() for alan in ALAN_SUTUNLARI}
+        ciftler = Counter()
         satir_sayisi = 0
         for satir in ws.iter_rows(min_row=2, values_only=True):
+            plaka = satir[ALAN_SUTUNLARI["plaka"] - 1] if len(satir) >= 5 else None
+            ad = satir[ALAN_SUTUNLARI["ad_soyad"] - 1] if len(satir) >= 5 else None
+            if _anlamli(plaka, "plaka") and _anlamli(ad, "ad_soyad"):
+                ciftler[(str(plaka).strip(), str(ad).strip())] += 1
             satirda_deger = False
             for alan, sutun in ALAN_SUTUNLARI.items():
                 deger = satir[sutun - 1] if len(satir) >= sutun else None
@@ -169,6 +174,11 @@ def referans_olustur(excel_yolu: Path, sayfa: str) -> dict:
             "ogrenme_zamani": datetime.now().isoformat(timespec="seconds"),
             "satir_sayisi": satir_sayisi,
             "alanlar": alanlar,
+            # Plaka↔ad birlikteliği otomatik düzeltmede destek olarak kullanılır.
+            "ciftler": [
+                {"plaka": p, "ad_soyad": a, "adet": n}
+                for (p, a), n in ciftler.most_common()
+            ],
         }
         mevcut_veri = None
         if REFERANS_FILE.exists():
@@ -540,27 +550,72 @@ def kayit_onerileri(kayit: dict) -> dict | None:
     }
 
 
-def guvenli_otomatik_duzelt(kayit: dict) -> int:
-    """Geçmişe dayanarak yalnız çok yüksek güvenli metin düzeltmelerini uygular.
+def birliktelik_ornekleri() -> tuple[list[dict], tuple]:
+    """Plaka↔ad-soyad birlikteliği için onaylı fişler ve Excel satır çiftleri.
 
-    Aynı arama anahtarına inen Türkçe karakter/case varyantları risksiz biçimde
-    kanonikleştirilir. Yakın eşleşmelerde ise alan bazlı yüksek eşik ve geçmişte
-    en az iki kullanım şartı aranır. Tüm değişiklikler denetim için kayda yazılır.
+    İkinci değer önbellek anahtarıdır (dosya değişince sözlük yeniden kurulur).
     """
+    dosyalar = [ROOT / "sonuclar.json", *sorted((ROOT / "arsiv").glob("**/sonuclar.json"))]
+    anahtar = tuple(
+        (str(d), d.stat().st_mtime_ns) for d in dosyalar if d.exists()
+    )
+    ornekler = []
+    for dosya, _ in anahtar:
+        try:
+            kayitlar = json.loads(Path(dosya).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        ornekler.extend(
+            k for k in kayitlar
+            if isinstance(k, dict) and k.get("_onaylandi") and not k.get("_silindi")
+        )
+    for kaynak in (referans_yukle() or {}).get("kaynaklar", []):
+        for cift in kaynak.get("ciftler", []):
+            ornekler.extend([cift] * int(cift.get("adet", 1)))
+    return ornekler, anahtar
+
+
+_SOZLUK_ONBELLEK: dict = {}
+
+
+def _otomatik_sozluk(referans: dict):
+    import otomatik_duzeltme  # döngüsel içe aktarmayı önler
+
+    ornekler, ornek_anahtari = birliktelik_ornekleri()
+    anahtar = (id(referans), ornek_anahtari)
+    if _SOZLUK_ONBELLEK.get("anahtar") != anahtar:
+        _SOZLUK_ONBELLEK["sozluk"] = otomatik_duzeltme.Sozluk(
+            referans.get("alanlar", {}), ornekler
+        )
+        _SOZLUK_ONBELLEK["anahtar"] = anahtar
+    return _SOZLUK_ONBELLEK["sozluk"]
+
+
+def guvenli_otomatik_duzelt(kayit: dict) -> int:
+    """Geçmişe dayanarak güvenli metin düzeltmelerini uygular.
+
+    Önce kullanıcının açık düzeltme kuralları (yanlış→doğru) uygulanır. Sonra
+    otomatik_duzeltme modülü, OCR karışıklıklarını (2/Z, 5/S, 0/D...) katlayan
+    benzerlik ve plaka↔ad birlikteliğiyle geçmişteki en yakın tek adayı seçer.
+    Fazladan sözcük içeren adaylar (RT 650 → RT 650 SARI VİNÇ) uygulanmaz.
+    Tüm değişiklikler denetim için kayda yazılır.
+    """
+    import otomatik_duzeltme
+
     referans = birlesik_referans_yukle()
     if not referans:
         return 0
 
     degisiklikler = []
     kullanici = _kullanici_yukle()
-    yakin_esikler = {"firma": 95, "plaka": 88, "ad_soyad": 95}
+    kurallar = set()
     for alan in ALAN_SUTUNLARI:
         mevcut = str(kayit.get(alan) or "").strip()
         if not _anlamli(mevcut, alan):
             continue
-
         kesin = _kesin_kullanici_eslesmesi(kullanici, alan, mevcut)
         if kesin:
+            kurallar.add(alan)
             yeni = str(kesin.get("dogru") or "").strip()
             if yeni and yeni != mevcut:
                 kayit[alan] = yeni
@@ -569,46 +624,34 @@ def guvenli_otomatik_duzelt(kayit: dict) -> int:
                     "benzerlik": 100,
                     "neden": f"kullanıcı düzeltmesi ({int(kesin.get('adet', 0))} kez)",
                 })
-            continue
 
-        adaylar = referans.get("alanlar", {}).get(alan, [])
-        mevcut_anahtar = arama_anahtari(mevcut)
+    def anlamli(deger, alan):
+        return alan not in kurallar and _anlamli(deger, alan)
 
-        ayni = [a for a in adaylar if arama_anahtari(a.get("deger")) == mevcut_anahtar]
-        if ayni:
-            aday = max(
-                ayni,
-                key=lambda a: (int(a.get("kullanici_adet", 0)), int(a.get("adet", 0))),
-            )
-            yeni = str(aday.get("deger") or "").strip()
-            if yeni and yeni != mevcut:
-                kayit[alan] = yeni
-                degisiklikler.append({
-                    "alan": alan, "eski": mevcut, "yeni": yeni,
-                    "benzerlik": 100, "neden": "geçmişteki kanonik yazım",
-                })
-            continue
-
-        puanli = sorted(
-            ((benzerlik(mevcut, a.get("deger")), a) for a in adaylar),
-            key=lambda x: (-x[0], -int(x[1].get("kullanici_adet", 0)), -int(x[1].get("adet", 0))),
+    onceki = {alan: kayit.get(alan) for alan in ALAN_SUTUNLARI}
+    for degisiklik in otomatik_duzeltme.duzelt(
+        kayit, _otomatik_sozluk(referans), anlamli=anlamli
+    ):
+        alan = degisiklik["alan"]
+        # OCR'ın böldüğü sözcükler (ÇAKA L → ÇAKAL) fazladan sözcük sayılmaz;
+        # kural yalnız aday belirgin biçimde uzunsa (RT 650 → RT 650 SARI VİNÇ) işler.
+        uzunluk_farki = abs(
+            len(arama_anahtari(degisiklik["yeni"]).replace(" ", ""))
+            - len(arama_anahtari(degisiklik["eski"]).replace(" ", ""))
         )
-        if not puanli:
+        if (
+            (uzunluk_farki > 2
+             and _fazladan_kelime_var_mi(degisiklik["eski"], degisiklik["yeni"]))
+            or (
+                arama_anahtari(degisiklik["eski"]) != arama_anahtari(degisiklik["yeni"])
+                and _bilinen_gecerli_deger(kullanici, alan, degisiklik["eski"])
+            )
+        ):
+            kayit[alan] = onceki[alan]
             continue
-        puan, aday = puanli[0]
-        ikinci = puanli[1][0] if len(puanli) > 1 else 0
-        gecmis = int(aday.get("adet", 0))
-        if puan < yakin_esikler[alan] or gecmis < 2 or puan - ikinci < 5:
-            continue
-        if _fazladan_kelime_var_mi(mevcut, aday.get("deger")):
-            continue
-        yeni = str(aday.get("deger") or "").strip()
-        if yeni and yeni != mevcut:
-            kayit[alan] = yeni
-            degisiklikler.append({
-                "alan": alan, "eski": mevcut, "yeni": yeni,
-                "benzerlik": puan, "neden": f"geçmişte {gecmis} kullanım",
-            })
+        if arama_anahtari(degisiklik["eski"]) == arama_anahtari(degisiklik["yeni"]):
+            degisiklik["neden"] = "geçmişteki kanonik yazım"
+        degisiklikler.append(degisiklik)
 
     if degisiklikler:
         kayit["_otomatik_duzeltmeler"] = degisiklikler

@@ -480,3 +480,33 @@ AÇIK:
 - Telefon sayfası gerçek iPhone/Android cihazda denenmedi (tarayıcıda
   sahte 4000x3000 fotoğraflarla denendi).
 - Depodaki EXE eski; EXE_OLUSTUR.bat ile Windows'ta yeniden oluşturulmalı.
+
+
+7) 18 EKİM 2026 — 100 FİŞLİK SABİT TEST SETİ + YENİ OTOMATİK DÜZELTME
+---------------------------------------------------------------------
+TEST SETİ: `python ocr_benchmark.py --set-olustur` → benchmark_testseti.json
+(gitignore'da; kişisel veri). 793 onaylı fişten sabit tohumla 100 fiş
+(90 araç / 10 ekipman, parti oranında). Fişler SHA-256 ile bulunur; parti
+arşivlenip dosya taşınsa da set çalışır. Karşılaştırma iki türlü:
+normalize (Türkçe harf, boşluk, MRK öneki, tarih ayırıcı yok sayılır) ve birebir.
+
+_ham ALANLARI NEDEN HEP FARKLI GÖRÜNÜYORDU: _ham modelin ham anahtarlarını
+tutar (sayin_alani, arac_plakasi_alani, adi_soyadi_alani, km_alani); firma/
+plaka/ad_soyad/km anahtarı hiç yok. esle()+dogrula() sonrası kalan farklar
+gerçek düzeltmedir (el yazısı isim/plaka harf hataları).
+
+MODEL ÖLÇÜMÜ (aynı set, normalize):
+- qwen2.5vl:7b @1600: alan %85,7, tam doğru fiş %35, 5,9 sn/fiş.
+- PaddleOCR-VL 1.6 (resmi pipeline, ayrı ortam): aynı 22 fişte alan %74,7
+  (Qwen %84,4), tam doğru %9 (Qwen %41), ~47 sn/fiş → kullanılmadı.
+
+DÜZELTME KATMANI (otomatik_duzeltme.py, excel_ogrenme.guvenli_otomatik_duzelt):
+- WRatio yerine tam metin oranı (kısa bir ad, uzun tam ada 90 almıyor),
+  OCR karışıklığı katlama (2/Z 5/S 6/G 8/B 0/O/D; plakada harf ve rakam
+  bölümleri ayrı), plaka↔ad birlikteliği desteği, 'Sayın:'/'null' firma
+  temizliği. Eşikler test dışı 693 fişte 2 katlı taramayla seçildi.
+- Sızıntısız ölçüm (duzeltme_benchmark.py: referans, değerlendirilen fişlerin
+  Excel satırları ve kullanıcı düzeltmeleri çıkarılarak kurulur), 100 fiş:
+  düzeltmesiz %35 → eski düzeltme %48 → yeni düzeltme %78 tam doğru fiş;
+  alan doğruluğu %85,7 → %90,0 → %96,4. Düzelen 79 alan, bozulan 4.
+- Kalan hataların çoğu ekipman fişleri ve tutarsız etiketler (GUZ/GVZ).

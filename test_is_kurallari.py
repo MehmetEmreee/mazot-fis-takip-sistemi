@@ -18,7 +18,9 @@ import extract_json
 import uygulama
 import parti_yonetimi
 from dogrulama import kaydi_dogrula
-from normalizasyon import fis_normalize_et, kilometreyi_duzelt, plakayi_duzelt
+from normalizasyon import (
+    firmayi_duzelt, fis_normalize_et, kilometreyi_duzelt, plakayi_duzelt,
+)
 
 
 ROOT = Path(__file__).resolve().parent
@@ -45,6 +47,13 @@ class NormalizasyonTesti(unittest.TestCase):
         self.assertEqual(fis_normalize_et({"firma": "7"})["firma"], "Selim İnşaat")
         self.assertEqual(plakayi_duzelt("H2 1663"), "34 H2 1663")
         self.assertEqual(plakayi_duzelt("KAZIK MAK", ekipman_durumu=True), "KAZIK MAK")
+
+    def test_sayin_etiketi_ve_null_firma_sayilmaz(self):
+        self.assertEqual(firmayi_duzelt("Sayın:"), "Selim İnşaat")
+        self.assertEqual(firmayi_duzelt("SAYIN"), "Selim İnşaat")
+        self.assertEqual(firmayi_duzelt("null"), "Selim İnşaat")
+        self.assertEqual(firmayi_duzelt("Sayın: AZGÜN YAPI"), "AZGÜN YAPI")
+        self.assertEqual(firmayi_duzelt("SAYINLAR NAKLİYAT"), "SAYINLAR NAKLİYAT")
 
 
 class DogrulamaTesti(unittest.TestCase):
@@ -378,6 +387,74 @@ class KullaniciOgrenmesiTesti(unittest.TestCase):
                 excel_ogrenme.KULLANICI_FILE = eski_kullanici
                 excel_ogrenme.referans_yukle.cache_clear()
                 excel_ogrenme.birlesik_referans_yukle.cache_clear()
+
+
+class BenzerlikDuzeltmesiTesti(unittest.TestCase):
+    """otomatik_duzeltme: OCR karışıklığı katlama ve plaka↔ad birlikteliği."""
+
+    def setUp(self):
+        self.gecici = tempfile.TemporaryDirectory(dir=ROOT)
+        gecici = Path(self.gecici.name)
+        self.eski = (excel_ogrenme.REFERANS_FILE, excel_ogrenme.KULLANICI_FILE,
+                     excel_ogrenme.birliktelik_ornekleri)
+        excel_ogrenme.REFERANS_FILE = gecici / "referans.json"
+        excel_ogrenme.KULLANICI_FILE = gecici / "kullanici.json"
+        excel_ogrenme.KULLANICI_FILE.write_text(json.dumps({
+            "surum": 2,
+            "alanlar": {
+                "firma": [{"deger": "AZGÜN YAPI", "adet": 30}],
+                "plaka": [
+                    {"deger": "34 KDB 659", "adet": 12},
+                    {"deger": "34 KDB 754", "adet": 20},
+                    {"deger": "34 RFE 454", "adet": 15},
+                ],
+                "ad_soyad": [
+                    {"deger": "VELİ ÇAKAL", "adet": 9},
+                    {"deger": "ORHAN", "adet": 40},
+                    {"deger": "ORHAN KARADENİZLİ", "adet": 6},
+                    {"deger": "ALİ RIZA", "adet": 50},
+                ],
+            },
+            "eslesmeler": {"firma": [], "plaka": [], "ad_soyad": []},
+        }, ensure_ascii=False), encoding="utf-8")
+        ciftler = [{"plaka": "34 KDB 754", "ad_soyad": "VELİ ÇAKAL"}] * 5
+        excel_ogrenme.birliktelik_ornekleri = lambda: (ciftler, "test")
+        excel_ogrenme.referans_yukle.cache_clear()
+        excel_ogrenme.birlesik_referans_yukle.cache_clear()
+
+    def tearDown(self):
+        (excel_ogrenme.REFERANS_FILE, excel_ogrenme.KULLANICI_FILE,
+         excel_ogrenme.birliktelik_ornekleri) = self.eski
+        excel_ogrenme.referans_yukle.cache_clear()
+        excel_ogrenme.birlesik_referans_yukle.cache_clear()
+        self.gecici.cleanup()
+
+    def duzelt(self, **alanlar):
+        kayit = {"firma": "-", "plaka": "-", "ad_soyad": "-", **alanlar}
+        excel_ogrenme.guvenli_otomatik_duzelt(kayit)
+        return kayit
+
+    def test_plakada_harf_rakam_karisikligi_duzelir(self):
+        self.assertEqual(self.duzelt(plaka="34 K08 659")["plaka"], "34 KDB 659")
+
+    def test_ocrin_boldugu_sozcuk_duzelir(self):
+        self.assertEqual(self.duzelt(ad_soyad="VELİ GAKA L")["ad_soyad"], "VELİ ÇAKAL")
+        self.assertEqual(self.duzelt(firma="A2GUN YAP1")["firma"], "AZGÜN YAPI")
+
+    def test_kisa_on_ek_tam_isme_tercih_edilmez(self):
+        self.assertEqual(
+            self.duzelt(ad_soyad="ORHAN KARADENİLİ")["ad_soyad"], "ORHAN KARADENİZLİ"
+        )
+
+    def test_birliktelik_dusuk_benzerlikte_destek_olur(self):
+        # 34 K00 754 tek başına eşiğin altında; aynı fişteki şoför bu plakayla
+        # geçmişte birlikte görüldüğü için düzeltilir.
+        self.assertEqual(self.duzelt(plaka="34 K00 754")["plaka"], "34 K00 754")
+        kayit = self.duzelt(plaka="34 K00 754", ad_soyad="VELİ ÇAKAL")
+        self.assertEqual(kayit["plaka"], "34 KDB 754")
+
+    def test_bilinmeyen_yeni_deger_degismez(self):
+        self.assertEqual(self.duzelt(ad_soyad="KEMAL YILDIZ")["ad_soyad"], "KEMAL YILDIZ")
 
 
 @unittest.skipUnless(KAYNAK_EXCEL.exists(), "Gerçek Excel örneği bu bilgisayarda yok")

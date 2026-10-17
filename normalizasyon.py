@@ -36,8 +36,15 @@ def plakayi_duzelt(plaka, ekipman_durumu: bool = False) -> str:
 
 
 def firmayi_duzelt(firma) -> str:
-    """Boş veya yalnızca rakamlardan oluşan anlamsız firma değerini düzeltir."""
+    """Boş veya yalnızca rakamlardan oluşan anlamsız firma değerini düzeltir.
+
+    Model bazen basılı 'Sayın:' etiketini veya 'null' metnini değer diye yazar;
+    etiket atılır, geriye bir şey kalmazsa varsayılan firma kullanılır.
+    """
     metin = "" if firma is None else str(firma).strip()
+    metin = re.sub(r"^\s*SAY[Iİı]N\b\s*:?\s*", "", metin, flags=re.IGNORECASE).strip()
+    if metin.casefold() in {"null", "none"}:
+        metin = ""
     if not metin or metin == BOS_DEGER or metin.isdigit():
         return VARSAYILAN_FIRMA
     return metin
