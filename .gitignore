@@ -33,3 +33,8 @@ mazot-fis-yonetim-sistemi/
 
 # Claude Code oturum dosyaları
 .claude/
+
+# Gercek firma/isim/plaka iceren ogrenme ve benchmark verileri
+kullanici_ogrenmeleri.json
+excel_referans.json
+benchmark_*.json
