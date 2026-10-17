@@ -38,3 +38,14 @@ mazot-fis-yonetim-sistemi/
 kullanici_ogrenmeleri.json
 excel_referans.json
 benchmark_*.json
+
+# Telefondan/klasorden gelen, henuz islenmemis fisler (kisisel veri)
+gelen_fisler/
+
+# PyInstaller ara ciktilari (EXE_OLUSTUR.bat yeniden uretir)
+build/
+dist/
+
+# macOS
+.DS_Store
+._*

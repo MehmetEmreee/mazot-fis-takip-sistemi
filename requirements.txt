@@ -1,0 +1,11 @@
+# Mazot Fis Kontrol - calisma zamani bagimliliklari
+# (arayuz, uygulama, extract_json, excel_aktar, excel_ogrenme, parti_yonetimi,
+#  export_excel, dogrulama, normalizasyon modullerinin import ettikleri)
+#
+# Kurulum:  pip install -r requirements.txt
+# Gelistirme/deney araclari icin: pip install -r requirements-dev.txt
+pillow>=10.0
+requests>=2.31
+rapidfuzz>=3.0
+openpyxl>=3.1
+pillow-heif>=0.18  # iPhone HEIC fotoğrafları

@@ -1,0 +1,9 @@
+# Windows betikleri her zaman CRLF, macOS/Unix betikleri her zaman LF ile cikarilsin
+*.bat     text eol=crlf
+*.cmd     text eol=crlf
+*.command text eol=lf
+*.sh      text eol=lf
+
+*.exe binary
+*.pyz binary
+*.pkg binary

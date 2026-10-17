@@ -436,3 +436,47 @@ BAŞARI ÖLÇÜTÜ:
 - Amaç yalnız genel yüzdeyi yükseltmek değil; kullanıcıya gösterilen yanlış
   veya gereksiz uyarı sayısını ve fiş başına kontrol süresini düşürmek.
 - Çoğu fiş tek model çağrısıyla bitmeli; yalnız şüpheliler ikinci çağrı almalı.
+
+
+6) 18 EKİM 2026 — TOPLU FOTOĞRAF YÜKLEME + MAC/WINDOWS UYUMU
+--------------------------------------------------------------
+SORUN: Telefondan galeriden çok fiş seçince yükleme çok uzuyordu; 40'ar 40'ar
+seçmek gerekiyordu. Sebepler: 4-8 MB'lık tam çözünürlüklü fotoğraflar ham
+gönderiliyordu, yalnız 2 paralel yükleme vardı, ekran kapanınca/sekme arka
+plana geçince yüklemeler kopuyor ve elle "Tekrar dene" gerekiyordu, 40'tan
+fazla seçimde önizleme kapanıyordu.
+
+ARAŞTIRMA (varsayım yerine kaynak):
+- iOS fotoğraf seçici, seçilen fotoğrafları sayfaya vermeden önce HEIC→JPEG
+  çeviriyor; çok seçimde uzun bekleme bundan (transloadit/uppy #5062,
+  zenn.dev/kou_pg_0131/articles/safari-input-file-heic). accept özniteliği
+  bunu durdurmuyor; image/heic eklemek Safari 17+'da JPEG'leri .heic diye
+  etiketletebiliyor (developer.apple.com/forums/thread/743049).
+- Wake Lock API yalnız HTTPS'te çalışıyor; yerel http adresinde yok.
+- LocalSend (github.com/localsend/localsend, Apache-2.0, iOS/Android/Win/Mac,
+  internetsiz LAN) masaüstünde "Save to folder" ve "Quick Save for
+  Favorites" ayarlarına sahip (uygulamanın i18n dosyasından doğrulandı).
+- pillow-heif: Windows ve Mac için hazır wheel var (BSD-3).
+
+YAPILANLAR:
+- gelen_fisler/ klasörü izleniyor (3 sn). Boyut+zaman iki taramada sabit ve
+  görsel tam (JPEG FF D9 / tam çözme) ise kuyruğa alınıyor; dosyalar
+  silinmiyor, _islendi/_tekrar/_hatali'ye taşınıyor. LocalSend'in kayıt
+  klasörü buraya ayarlanınca telefondan sınırsız sayıda fiş tek seferde
+  geliyor.
+- Masaüstü arayüzde "Toplu Ekle": sürükle-bırak, dosya ve klasör seçimi.
+- Telefon sayfası: göndermeden önce uzun kenar 2400 px / JPEG 0.9 (OCR zaten
+  1600 px kullanıyor), 3 paralel, otomatik yeniden deneme, sınırsız küçük
+  önizleme, ekranı açık tut uyarısı, oturum içi tekrar seçimi atlama.
+- HEIC desteği (pillow-heif): fotoğraflar girişte JPEG'e çevriliyor.
+- Kayıtlara _orijinal_ad ve _kaynak (telefon/toplu/klasor) eklendi.
+- Mac: BASLAT.command / KURULUM.command / YENIDEN_BASLAT.command; Ollama
+  yolu her iki işletim sisteminde aranıyor. requirements.txt eklendi.
+- Windows: BASLAT_ARAYUZ.bat artık .venv varsa güncel kaynak kodu çalıştırıyor
+  (depodaki EXE git pull sonrası eski kalıyordu). EXE_OLUSTUR.bat eklendi.
+- Testler: test_toplu_yukleme.py (18 test) + test_is_kurallari (21).
+
+AÇIK:
+- Telefon sayfası gerçek iPhone/Android cihazda denenmedi (tarayıcıda
+  sahte 4000x3000 fotoğraflarla denendi).
+- Depodaki EXE eski; EXE_OLUSTUR.bat ile Windows'ta yeniden oluşturulmalı.

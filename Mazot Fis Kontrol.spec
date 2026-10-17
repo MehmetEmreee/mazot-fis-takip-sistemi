@@ -10,7 +10,8 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # Calisma zamaninda kullanilmayan agir paketler (yalniz deney betikleri kullanir)
+    excludes=['numpy', 'cv2', 'tkinter', 'transformers', 'torch'],
     noarchive=False,
     optimize=0,
 )

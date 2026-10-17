@@ -99,6 +99,7 @@ function renderAll() {
   $("#exportButton").disabled = false;
   const captureLink = document.querySelector('a[href="/cek"]');
   if (captureLink) captureLink.classList.toggle("hidden", state.readOnly);
+  $("#bulkButton").classList.toggle("hidden", state.readOnly);
 }
 
 function renderCounts() {
@@ -607,6 +608,273 @@ async function createNewParty() {
     setBusy(button, false);
   }
 }
+
+// ---- Toplu ekleme (bilgisayardan çok sayıda fotoğraf) ----
+const BULK_IMAGE_NAME = /\.(jpe?g|png|webp|bmp|heic|heif)$/i;
+const BULK_IMAGE_TYPE = /^image\/(jpeg|pjpeg|png|webp|bmp|x-ms-bmp|heic|heif)$/i;
+const BULK_CONCURRENCY = 4;
+const BULK_RETRIES = 2;
+const bulk = {
+  queue: [], running: 0, total: 0,
+  ok: 0, dup: 0, err: 0, skipped: 0, errors: [], inboxTimer: null, inboxLast: null,
+};
+
+function bulkError(message) {
+  const box = $("#bulkError");
+  box.textContent = message || "";
+  box.classList.toggle("hidden", !message);
+}
+
+function isBulkImage(file) {
+  return BULK_IMAGE_NAME.test(file.name) || BULK_IMAGE_TYPE.test(file.type || "");
+}
+
+function readEntryFile(entry) {
+  return new Promise((resolve) => entry.file(resolve, () => resolve(null)));
+}
+
+function readDirectoryBatch(reader) {
+  return new Promise((resolve) => reader.readEntries(resolve, () => resolve([])));
+}
+
+async function walkEntry(entry, out) {
+  if (!entry) return;
+  if (entry.isFile) {
+    const file = await readEntryFile(entry);
+    if (file) out.push({ file, path: entry.fullPath || file.name });
+    return;
+  }
+  if (entry.isDirectory) {
+    const reader = entry.createReader();
+    // readEntries her çağrıda en fazla ~100 öğe döndürür; boş gelene kadar oku.
+    for (;;) {
+      const batch = await readDirectoryBatch(reader);
+      if (!batch.length) break;
+      for (const child of batch) await walkEntry(child, out);
+    }
+  }
+}
+
+async function filesFromDrop(dataTransfer) {
+  // webkitGetAsEntry ilk await'ten önce çağrılmalı; sonra DataTransfer boşalır.
+  const entries = [...(dataTransfer.items || [])]
+    .filter((item) => item.kind === "file")
+    .map((item) => (item.webkitGetAsEntry ? item.webkitGetAsEntry() : null));
+  if (!entries.length || entries.some((entry) => !entry)) {
+    return [...(dataTransfer.files || [])].map((file) => ({ file, path: file.name }));
+  }
+  const out = [];
+  for (const entry of entries) await walkEntry(entry, out);
+  return out;
+}
+
+function renderBulkProgress() {
+  const finished = bulk.ok + bulk.dup + bulk.err;
+  const percent = bulk.total ? Math.round((finished / bulk.total) * 100) : 0;
+  $("#bulkProgress").classList.toggle("hidden", !bulk.total);
+  $("#bulkProgressText").textContent = bulk.running || bulk.queue.length
+    ? `${finished} / ${bulk.total} gönderildi…`
+    : `${finished} / ${bulk.total} tamamlandı`;
+  $("#bulkProgressPercent").textContent = `%${percent}`;
+  $("#bulkProgressBar").style.width = `${percent}%`;
+  $("#bulkOk").textContent = bulk.ok;
+  $("#bulkDup").textContent = bulk.dup;
+  $("#bulkErr").textContent = bulk.err;
+  const errors = $("#bulkErrors");
+  errors.textContent = bulk.errors.slice(-30).join("\n");
+  errors.classList.toggle("hidden", !bulk.errors.length);
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function uploadBulkItem(item) {
+  let lastError = "Bilinmeyen hata";
+  for (let attempt = 0; attempt <= BULK_RETRIES; attempt += 1) {
+    if (attempt) await sleep(700 * attempt);
+    try {
+      const response = await fetch("/api/upload", {
+        method: "POST",
+        headers: {
+          // Bilgisayarda sıkıştırma yok: orijinal dosya olduğu gibi gider.
+          "Content-Type": item.file.type || "application/octet-stream",
+          "X-Orijinal-Ad": encodeURIComponent(item.file.name),
+          "X-Kaynak": "toplu",
+        },
+        body: item.file,
+      });
+      if (response.status === 202) return "ok";
+      if (response.status === 409) return "dup";
+      const data = await response.json().catch(() => ({}));
+      lastError = data.error || `HTTP ${response.status}`;
+      // 4xx kalıcı hatadır (biçim, boyut); tekrar denemek işe yaramaz.
+      if (response.status >= 400 && response.status < 500) break;
+    } catch (error) {
+      lastError = "Sunucuya ulaşılamadı";
+    }
+  }
+  throw new Error(lastError);
+}
+
+async function bulkWorker() {
+  while (bulk.queue.length) {
+    const item = bulk.queue.shift();
+    try {
+      const result = await uploadBulkItem(item);
+      bulk[result] += 1;
+    } catch (error) {
+      bulk.err += 1;
+      bulk.errors.push(`${item.path}: ${error.message}`);
+    }
+    renderBulkProgress();
+  }
+}
+
+async function startBulkUpload(items) {
+  bulkError("");
+  const images = items.filter((item) => isBulkImage(item.file));
+  const skipped = items.length - images.length;
+  if (skipped) toast(`${skipped} görsel olmayan dosya atlandı`);
+  if (!images.length) {
+    if (!skipped) bulkError("Eklenecek fotoğraf bulunamadı.");
+    return;
+  }
+  // Sunucudaki OCR sırası tahmin edilebilir olsun diye yola göre sırala.
+  images.sort((a, b) => a.path.localeCompare(b.path, "tr", { numeric: true }));
+
+  const fresh = !bulk.running && !bulk.queue.length;
+  if (fresh) Object.assign(bulk, { total: 0, ok: 0, dup: 0, err: 0, errors: [] });
+  bulk.queue.push(...images);
+  bulk.total += images.length;
+  renderBulkProgress();
+  if (!fresh) return; // çalışan işçiler yeni eklenenleri de alır
+
+  const workers = Array.from({ length: BULK_CONCURRENCY }, async () => {
+    bulk.running += 1;
+    try { await bulkWorker(); } finally { bulk.running -= 1; }
+  });
+  await Promise.all(workers);
+  renderBulkProgress();
+  const parts = [`${bulk.ok} fiş eklendi`];
+  if (bulk.dup) parts.push(`${bulk.dup} tekrar atlandı`);
+  if (bulk.err) parts.push(`${bulk.err} hata`);
+  toast(parts.join(" · "), bulk.err > 0 && !bulk.ok);
+  await refreshAfterBulk();
+}
+
+async function refreshAfterBulk() {
+  try {
+    await loadParties();
+  } catch (error) {
+    // parti listesi yenilenemese de fişler yenilensin
+  }
+  if (state.partyId === "aktif") await loadReceipts();
+}
+
+async function loadInboxStatus() {
+  try {
+    const response = await fetch("/api/gelen", { cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Gelen kutusu okunamadı");
+    $("#inboxPath").textContent = data.klasor;
+    $("#inboxPath").title = data.klasor;
+    $("#inboxStatus").textContent =
+      `Klasörde bekleyen: ${data.bekleyen} · bugün klasörden eklenen: ${data.son_aktarilan}`;
+    if (bulk.inboxLast !== null && data.son_aktarilan > bulk.inboxLast && !bulk.running) {
+      refreshAfterBulk();
+    }
+    bulk.inboxLast = data.son_aktarilan;
+  } catch (error) {
+    $("#inboxStatus").textContent = error.message;
+  }
+}
+
+function openBulkModal() {
+  if (state.readOnly) return;
+  bulkError("");
+  renderBulkProgress();
+  $("#bulkModal").classList.remove("hidden");
+  bulk.inboxLast = null;
+  loadInboxStatus();
+  clearInterval(bulk.inboxTimer);
+  bulk.inboxTimer = setInterval(loadInboxStatus, 4000);
+}
+
+function closeBulkModal() {
+  $("#bulkModal").classList.add("hidden");
+  clearInterval(bulk.inboxTimer);
+  bulk.inboxTimer = null;
+  if (bulk.running) toast("Yükleme arka planda sürüyor");
+}
+
+async function openInboxFolder() {
+  const button = $("#inboxOpen");
+  setBusy(button, true);
+  try {
+    const response = await fetch("/api/gelen/ac", { method: "POST" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "Klasör açılamadı");
+  } catch (error) {
+    bulkError(error.message);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+function pickedFiles(input) {
+  const items = [...(input.files || [])].map((file) => ({
+    file, path: file.webkitRelativePath || file.name,
+  }));
+  input.value = "";
+  return items;
+}
+
+$("#bulkButton").addEventListener("click", openBulkModal);
+$("#bulkClose").addEventListener("click", closeBulkModal);
+$("#bulkCancel").addEventListener("click", closeBulkModal);
+$("#bulkModal").addEventListener("click", (event) => {
+  if (event.target === $("#bulkModal")) closeBulkModal();
+});
+$("#bulkPickFiles").addEventListener("click", () => $("#bulkFiles").click());
+$("#bulkPickFolder").addEventListener("click", () => $("#bulkFolder").click());
+$("#bulkFiles").addEventListener("change", (event) => startBulkUpload(pickedFiles(event.target)));
+$("#bulkFolder").addEventListener("change", (event) => startBulkUpload(pickedFiles(event.target)));
+$("#inboxOpen").addEventListener("click", openInboxFolder);
+$("#bulkDrop").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" || event.key === " ") { event.preventDefault(); $("#bulkFiles").click(); }
+});
+
+function isFileDrag(event) {
+  return [...(event.dataTransfer?.types || [])].includes("Files");
+}
+// Sayfanın herhangi bir yerine bırakılan dosyalar da toplu eklemeye gider;
+// tarayıcının dosyayı açıp sayfadan çıkmasını engeller.
+document.addEventListener("dragover", (event) => {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = state.readOnly ? "none" : "copy";
+  $("#bulkDrop").classList.toggle("dragover", $("#bulkDrop").contains(event.target));
+});
+document.addEventListener("dragleave", (event) => {
+  if (!event.relatedTarget) $("#bulkDrop").classList.remove("dragover");
+});
+document.addEventListener("drop", async (event) => {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  $("#bulkDrop").classList.remove("dragover");
+  if (state.readOnly) {
+    toast("Arşiv partisine fiş eklenemez; önce aktif partiyi seç", true);
+    return;
+  }
+  const pending = filesFromDrop(event.dataTransfer);
+  if ($("#bulkModal").classList.contains("hidden")) openBulkModal();
+  $("#bulkDrop").classList.add("busy");
+  const items = await pending;
+  $("#bulkDrop").classList.remove("busy");
+  startBulkUpload(items);
+});
+window.addEventListener("beforeunload", (event) => {
+  if (bulk.running || bulk.queue.length) { event.preventDefault(); event.returnValue = ""; }
+});
 
 $("#reloadButton").addEventListener("click", () => loadReceipts({ announce: true }));
 $("#partySelect").addEventListener("change", async (event) => {

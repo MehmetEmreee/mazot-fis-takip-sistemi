@@ -58,6 +58,26 @@
       .sticky-capture button:active { background: var(--green-dark); }
       .offline { display: none; margin-bottom: 9px; padding: 9px; border-radius: 10px; background: #fde4de; color: #8a3328; text-align: center; font-size: 11px; font-weight: 700; }
       .offline.show { display: block; }
+
+      .quality-toggle { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 10px 2px 0; color: var(--muted); font-size: 11px; font-weight: 700; cursor: pointer; }
+      .quality-toggle input { width: 16px; height: 16px; margin: 0; accent-color: var(--green); }
+
+      .upload-banner { position: sticky; top: 0; z-index: 4; margin: 0 0 12px; padding: 11px 12px; border: 1px solid #f0d9a8; border-radius: 13px; background: var(--amber-soft); box-shadow: var(--shadow); }
+      .upload-banner strong { display: block; color: #6e3d05; font-size: 12px; line-height: 1.35; }
+      .upload-progress { height: 7px; margin: 8px 0 6px; overflow: hidden; border-radius: 99px; background: rgba(169,95,11,.15); }
+      .upload-progress div { width: 0; height: 100%; border-radius: 99px; background: var(--amber); transition: width .25s ease; }
+      .upload-banner span { display: block; color: var(--amber); font-size: 10px; font-weight: 700; }
+      .retry-all { display: block; width: 100%; margin: 0 0 8px; padding: 10px; border: 0; border-radius: 11px; background: #fde4de; color: #8a3328; font-size: 12px; font-weight: 800; cursor: pointer; }
+      .retry-all:active { background: #f9d3ca; }
+      .help-box { margin: 10px 0 0; padding: 11px 12px; border: 1px solid var(--line); border-radius: 13px; background: var(--green-soft); color: var(--green-dark); font-size: 11px; line-height: 1.5; }
+      .help-box a { color: var(--green-dark); font-weight: 800; }
+      .picker-overlay { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(23,35,30,.55); }
+      .picker-overlay > div { width: min(340px, 100%); padding: 20px 18px 16px; border-radius: 16px; background: var(--paper); box-shadow: var(--shadow); text-align: center; }
+      .picker-overlay strong { display: block; font-size: 14px; line-height: 1.4; }
+      .picker-overlay p { margin: 8px 0 14px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+      .picker-overlay button { padding: 9px 16px; border: 1px solid var(--line); border-radius: 10px; background: #f7f9f7; color: var(--ink); font-size: 12px; font-weight: 700; cursor: pointer; }
+      .spinner { width: 30px; height: 30px; margin: 0 auto 12px; border: 3px solid var(--green-soft); border-top-color: var(--green); border-radius: 50%; animation: spin .9s linear infinite; }
+      @keyframes spin { to { transform: rotate(360deg); } }
     </style>
   </head>
   <body>
@@ -73,7 +93,13 @@
         <div class="summary-card done"><strong id="doneCount">0</strong><span>TAMAMLANAN</span></div>
       </section>
 
-      <div class="offline" id="offlineWarning">Bağlantı yok. Fotoğraflar sayfada bekliyor; bağlantı gelince yeniden dene.</div>
+      <div class="upload-banner hidden" id="uploadBanner" role="status" aria-live="polite">
+        <strong>Yükleme bitene kadar ekranı açık tut, bu sayfadan çıkma</strong>
+        <div class="upload-progress"><div id="uploadProgressBar"></div></div>
+        <span id="uploadProgressText">0 / 0 yüklendi</span>
+      </div>
+
+      <div class="offline" id="offlineWarning">Bağlantı yok. Fotoğraflar sayfada bekliyor; bağlantı gelince otomatik gönderilecek.</div>
 
       <section class="mode-card">
         <p class="mode-title">Nasıl eklemek istersin?</p>
@@ -83,16 +109,27 @@
           <span class="icon" aria-hidden="true">📷</span><span>Şimdi Fiş Çek</span>
         </button>
         <button class="gallery-button" id="galleryButton" type="button">▦ Galeriden Toplu Seç</button>
+        <label class="quality-toggle"><input type="checkbox" id="originalToggle" /> Orijinal kalitede gönder</label>
         <p class="mode-hint">Fotoğraf kaydedilir kaydedilmez sıradakini çekebilirsin. OCR’ı beklemen gerekmez.</p>
       </section>
+      <p class="help-box">Çok sayıda fiş için en hızlısı: <a href="https://localsend.org" target="_blank" rel="noopener">LocalSend</a> uygulamasıyla bilgisayardaki <b>gelen_fisler</b> klasörüne gönder.</p>
 
       <div class="queue-heading"><strong>Bu oturumun kuyruğu</strong><span id="queueHint">Henüz fiş yok</span></div>
+      <button class="retry-all hidden" id="retryAllButton" type="button">Hatalıları yeniden dene</button>
       <section class="upload-list" id="uploadList"></section>
       <p class="empty-hint" id="emptyHint">Kamerayla peş peşe çek veya galeriden bütün fişleri tek seferde seç.</p>
     </main>
 
     <div class="sticky-capture">
       <button id="nextButton" type="button">📷 Sıradaki Fişi Çek</button>
+    </div>
+    <div class="picker-overlay hidden" id="pickerOverlay" role="alertdialog" aria-live="assertive">
+      <div>
+        <div class="spinner" aria-hidden="true"></div>
+        <strong>Fotoğraflar telefon tarafından hazırlanıyor, bekleyin…</strong>
+        <p>Çok sayıda fotoğraf seçtiysen bu bir dakika sürebilir. Liste kendiliğinden görünecek.</p>
+        <button type="button" id="pickerOverlayClose">Kapat</button>
+      </div>
     </div>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
@@ -107,128 +144,474 @@
       const queueHint = document.getElementById("queueHint");
       const offlineWarning = document.getElementById("offlineWarning");
       const toastEl = document.getElementById("toast");
+      const originalToggle = document.getElementById("originalToggle");
+      const uploadBanner = document.getElementById("uploadBanner");
+      const uploadProgressBar = document.getElementById("uploadProgressBar");
+      const uploadProgressText = document.getElementById("uploadProgressText");
+      const retryAllButton = document.getElementById("retryAllButton");
+
+      // Yükleme ayarları. Sunucu OCR için zaten 1600px'e küçültüyor; 2400px
+      // ve %90 JPEG kalitesi OCR açısından kayıpsız, boyutu ise ~10 kat azaltır.
+      const MAX_PARALLEL_UPLOADS = 3;
+      const PREPARE_AHEAD = 2;              // Yükleyicinin en fazla kaç fiş önünde sıkıştırılacağı
+      const MAX_EDGE = 2400;
+      const ORIGINAL_MAX_EDGE = 4096;       // HEIC'i orijinal modda JPEG'e çevirirken iOS tuval sınırı
+      const JPEG_QUALITY = 0.9;
+      const SMALL_FILE_BYTES = 1.5 * 1024 * 1024;
+      const THUMB_SIZE = 108;               // 54px kart küçük resmi için 2x
+      const RETRY_DELAYS = [2000, 5000, 10000];
+      const UPLOAD_TIMEOUT_MS = 120000;
+      const RESUME_ABORT_AFTER_MS = 8000;   // Arka planda bu süreden uzun kalındıysa askıdaki yüklemeleri yeniden başlat
+      const ORIGINAL_PREF_KEY = "cek.orijinalKalite";
+      const PENDING_STATES = new Set(["queued", "preparing", "uploading", "retrywait"]);
+      const UPLOADED_STATES = new Set(["processing", "done", "duplicate"]);
 
       const jobs = new Map();
       const uploadQueue = [];
+      const seenFiles = new Set();
       let activeUploads = 0;
       let pollTimer = null;
-      const MAX_PARALLEL_UPLOADS = 2;
+      let hiddenAt = 0;
+      let countsScheduled = false;
+      let savedBytes = 0;
+
+      try { originalToggle.checked = localStorage.getItem(ORIGINAL_PREF_KEY) === "1"; } catch (_) { /* depolama kapalı olabilir */ }
+      originalToggle.addEventListener("change", () => {
+        try { localStorage.setItem(ORIGINAL_PREF_KEY, originalToggle.checked ? "1" : "0"); } catch (_) { /* yoksay */ }
+      });
 
       function toast(message, isError = false) {
         toastEl.textContent = message;
         toastEl.classList.toggle("error", isError);
         toastEl.classList.add("show");
         clearTimeout(toast.timer);
-        toast.timer = setTimeout(() => toastEl.classList.remove("show"), 2400);
+        toast.timer = setTimeout(() => toastEl.classList.remove("show"), 2800);
+      }
+
+      function hasPendingUploads() {
+        for (const job of jobs.values()) if (PENDING_STATES.has(job.state)) return true;
+        return false;
+      }
+
+      function scheduleCounts() {
+        if (countsScheduled) return;
+        countsScheduled = true;
+        const run = () => { countsScheduled = false; updateCounts(); };
+        if (document.visibilityState === "visible" && window.requestAnimationFrame) requestAnimationFrame(run);
+        else setTimeout(run, 0);
+      }
+
+      function formatMB(bytes) {
+        return `${(bytes / (1024 * 1024)).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
       }
 
       function updateCounts() {
-        const values = [...jobs.values()];
-        const done = values.filter((job) => job.state === "done" || job.state === "duplicate").length;
-        const failed = values.filter((job) => job.state === "error").length;
-        const pending = values.length - done - failed;
-        totalCount.textContent = values.length;
+        let done = 0, failed = 0, uploaded = 0, pendingUpload = 0;
+        for (const job of jobs.values()) {
+          if (job.state === "done" || job.state === "duplicate") done += 1;
+          if (job.state === "error") failed += 1;
+          if (UPLOADED_STATES.has(job.state)) uploaded += 1;
+          if (PENDING_STATES.has(job.state)) pendingUpload += 1;
+        }
+        const total = jobs.size;
+        const pending = total - done - failed;
+        totalCount.textContent = total;
         processingCount.textContent = pending;
         doneCount.textContent = done;
-        queueHint.textContent = failed ? `${failed} yükleme yeniden denenmeli` : pending ? `${pending} fiş sırada` : values.length ? "Kuyruk tamamlandı" : "Henüz fiş yok";
-        emptyHint.classList.toggle("hidden", values.length > 0);
+        queueHint.textContent = failed ? `${failed} yükleme yeniden denenmeli` : pending ? `${pending} fiş sırada` : total ? "Kuyruk tamamlandı" : "Henüz fiş yok";
+        emptyHint.classList.toggle("hidden", total > 0);
         offlineWarning.classList.toggle("show", !navigator.onLine);
+        retryAllButton.classList.toggle("hidden", failed === 0);
+        retryAllButton.textContent = `Hatalıları yeniden dene (${failed})`;
+
+        uploadBanner.classList.toggle("hidden", pendingUpload === 0);
+        if (pendingUpload) {
+          const percent = total ? Math.round((uploaded / total) * 100) : 0;
+          uploadProgressBar.style.width = `${percent}%`;
+          const parts = [`${uploaded} / ${total} yüklendi`];
+          if (failed) parts.push(`${failed} hatalı`);
+          if (savedBytes > 512 * 1024) parts.push(`sıkıştırmayla ${formatMB(savedBytes)} tasarruf`);
+          uploadProgressText.textContent = parts.join(" · ");
+        }
       }
+
+      // ---------- Kartlar ----------
 
       function createCard(job) {
         const card = document.createElement("article");
         card.className = "upload-card";
         card.innerHTML = `
-          ${job.previewUrl
-            ? '<img class="upload-thumb" alt="Seçilen fiş önizlemesi" />'
-            : '<div class="upload-thumb no-preview" aria-hidden="true">▧</div>'}
-          <div class="upload-info"><strong>${escapeHtml(job.file.name)}</strong><span>Yükleme sırasında</span></div>
-          <button class="upload-status uploading" type="button" disabled>Bekliyor</button>`;
-        const image = card.querySelector("img");
-        if (image) {
-          image.src = job.previewUrl;
-          image.addEventListener("load", () => URL.revokeObjectURL(job.previewUrl), { once: true });
-        }
+          <div class="upload-thumb no-preview" aria-hidden="true">▧</div>
+          <div class="upload-info"><strong>${escapeHtml(job.file.name)}</strong><span>Sırada</span></div>
+          <button class="upload-status" type="button" disabled>Sırada</button>`;
         card.querySelector(".upload-status").addEventListener("click", () => retry(job.id));
-        uploadList.prepend(card);
         job.card = card;
+        job.titleEl = card.querySelector("strong");
+        job.detailEl = card.querySelector(".upload-info span");
+        job.statusEl = card.querySelector(".upload-status");
+        return card;
       }
 
-      function setCard(job, state, title, detail, statusText) {
-        job.state = state;
-        const status = job.card.querySelector(".upload-status");
-        job.card.querySelector("strong").textContent = title;
-        job.card.querySelector(".upload-info span").textContent = detail;
-        status.textContent = statusText;
-        status.className = `upload-status ${state}`;
-        status.disabled = state !== "error";
-        updateCounts();
+      function showThumb(job) {
+        if (!job.thumb || !job.card) return;
+        const holder = job.card.querySelector(".upload-thumb");
+        if (holder.tagName === "IMG") { holder.src = job.thumb; return; }
+        const image = document.createElement("img");
+        image.className = "upload-thumb";
+        image.alt = "Seçilen fiş önizlemesi";
+        image.src = job.thumb;
+        holder.replaceWith(image);
       }
+
+      function setCard(job, state, title, detail, statusText, statusClass = state) {
+        job.state = state;
+        job.titleEl.textContent = title;
+        job.detailEl.textContent = detail;
+        job.statusEl.textContent = statusText;
+        job.statusEl.className = `upload-status ${statusClass}`;
+        job.statusEl.disabled = state !== "error";
+        scheduleCounts();
+      }
+
+      // ---------- Dosya ekleme ----------
+
+      const IMAGE_NAME_RE = /\.(jpe?g|png|webp|heic|heif|gif|bmp)$/i;
 
       function addFiles(fileList) {
-        const files = [...fileList].filter((file) => file.type.startsWith("image/"));
-        // Çok büyük seçimlerde yüzlerce tam çözünürlüklü önizleme telefon
-        // belleğini doldurabilir. Dosyalar yine eksiksiz yüklenir; yalnızca
-        // küçük resimler yerine hafif bir simge gösterilir.
-        const showPreviews = files.length <= 40;
-        files.forEach((file) => {
+        const candidates = [...fileList].filter((file) => (file.type && file.type.startsWith("image/")) || IMAGE_NAME_RE.test(file.name || ""));
+        const fragment = document.createDocumentFragment();
+        let added = 0, skipped = 0;
+        for (const file of candidates) {
+          const key = `${file.name}|${file.size}|${file.lastModified}`;
+          if (seenFiles.has(key)) { skipped += 1; continue; }
+          seenFiles.add(key);
           const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-          const job = { id, file, previewUrl: showPreviews ? URL.createObjectURL(file) : null, state: "uploading", filename: null, card: null };
+          const job = {
+            id, file, state: "queued", filename: null, uploadId: null, card: null,
+            blob: null, contentType: null, compressed: false, preparing: null, thumb: null,
+            autoRetries: 0, sendCount: 0, controller: null, abortReason: null, waitOnline: false, retryTimer: null,
+          };
           jobs.set(id, job);
-          createCard(job);
+          fragment.appendChild(createCard(job));
           uploadQueue.push(job);
-          pumpUploads();
-        });
-        updateCounts();
-        if (files.length > 1) toast(`${files.length} fotoğraf kuyruğa eklendi`);
+          added += 1;
+        }
+        if (added) uploadList.prepend(fragment);
+        scheduleCounts();
+        pumpUploads();
+        if (skipped && added) toast(`${added} fotoğraf eklendi · ${skipped} tanesi zaten ekliydi, atlandı`);
+        else if (skipped) toast(`${skipped} fotoğraf bu oturumda zaten eklenmişti, atlandı`);
+        else if (added > 1) toast(`${added} fotoğraf kuyruğa eklendi`);
+        if (candidates.length < fileList.length) toast(`${fileList.length - candidates.length} dosya fotoğraf olmadığı için atlandı`, true);
       }
 
+      // ---------- Sıkıştırma (tek tek, tembel) ----------
+
+      let prepareChain = Promise.resolve();
+      let workCanvas = null;
+      let thumbCanvas = null;
+      const isAppleWebKit = /iP(hone|ad|od)/.test(navigator.userAgent)
+        || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+        || (/Safari\//.test(navigator.userAgent) && !/Chrome|Chromium|CriOS|Android|Edg\//.test(navigator.userAgent));
+
+      function withPrepareLock(task) {
+        const run = prepareChain.then(task, task);
+        prepareChain = run.catch(() => {});
+        return run;
+      }
+
+      function ensurePrepared(job) {
+        if (job.blob) return Promise.resolve();
+        if (!job.preparing) {
+          job.preparing = withPrepareLock(() => prepareJob(job)).finally(() => { job.preparing = null; });
+        }
+        return job.preparing;
+      }
+
+      function prefetchPrepare() {
+        let ahead = 0;
+        for (const job of uploadQueue) {
+          if (ahead >= PREPARE_AHEAD) break;
+          if (job.state !== "queued" && job.state !== "preparing") continue;
+          ahead += 1;
+          if (!job.blob && !job.preparing) ensurePrepared(job);
+        }
+      }
+
+      function originalContentType(file) {
+        if (file.type) return file.type;
+        const name = (file.name || "").toLowerCase();
+        if (/\.(heic|heif)$/.test(name)) return "image/heic";
+        if (/\.jpe?g$/.test(name)) return "image/jpeg";
+        if (name.endsWith(".png")) return "image/png";
+        if (name.endsWith(".webp")) return "image/webp";
+        return "application/octet-stream";
+      }
+
+      function isHeic(file) {
+        return /heic|heif/i.test(file.type || "") || /\.(heic|heif)$/i.test(file.name || "");
+      }
+
+      async function decodeWithImageBitmap(file) {
+        if (!window.createImageBitmap) return null;
+        try {
+          const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+          return { source: bitmap, width: bitmap.width, height: bitmap.height, close: () => { if (bitmap.close) bitmap.close(); } };
+        } catch (_) {
+          return null;
+        }
+      }
+
+      function decodeWithImage(file) {
+        return new Promise((resolve) => {
+          const url = URL.createObjectURL(file);
+          const image = new Image();
+          let finished = false;
+          const cleanup = () => { URL.revokeObjectURL(url); image.removeAttribute("src"); };
+          const fail = () => { if (finished) return; finished = true; cleanup(); resolve(null); };
+          const timer = setTimeout(fail, 30000);
+          image.decoding = "async";
+          image.onload = () => {
+            if (finished) return;
+            finished = true;
+            clearTimeout(timer);
+            if (!image.naturalWidth || !image.naturalHeight) { cleanup(); resolve(null); return; }
+            resolve({ source: image, width: image.naturalWidth, height: image.naturalHeight, close: cleanup });
+          };
+          image.onerror = () => { clearTimeout(timer); fail(); };
+          image.src = url;
+        });
+      }
+
+      async function decodeImage(file) {
+        // iOS/Safari'de <img> EXIF yönünü güvenilir uygular; diğerlerinde
+        // createImageBitmap daha hızlı ve ana iş parçacığını daha az yorar.
+        if (isAppleWebKit) return (await decodeWithImage(file)) || (await decodeWithImageBitmap(file));
+        return (await decodeWithImageBitmap(file)) || (await decodeWithImage(file));
+      }
+
+      function canvasToBlob(canvas, type, quality) {
+        return new Promise((resolve) => {
+          try { canvas.toBlob((blob) => resolve(blob), type, quality); } catch (_) { resolve(null); }
+        });
+      }
+
+      function makeThumb(decoded) {
+        thumbCanvas = thumbCanvas || document.createElement("canvas");
+        thumbCanvas.width = THUMB_SIZE;
+        thumbCanvas.height = THUMB_SIZE;
+        const ctx = thumbCanvas.getContext("2d");
+        const scale = Math.max(THUMB_SIZE / decoded.width, THUMB_SIZE / decoded.height);
+        const w = decoded.width * scale, h = decoded.height * scale;
+        ctx.fillStyle = "#e9eeeb";
+        ctx.fillRect(0, 0, THUMB_SIZE, THUMB_SIZE);
+        ctx.imageSmoothingQuality = "medium";
+        ctx.drawImage(decoded.source, (THUMB_SIZE - w) / 2, (THUMB_SIZE - h) / 2, w, h);
+        try { return thumbCanvas.toDataURL("image/jpeg", 0.7); } catch (_) { return null; }
+      }
+
+      function useOriginal(job) {
+        job.blob = job.file;
+        job.contentType = originalContentType(job.file);
+        job.compressed = false;
+      }
+
+      async function prepareJob(job) {
+        if (job.blob) return;
+        await doPrepare(job);
+        if (job.state === "preparing") {
+          const note = job.compressed ? `Hazır · ${formatMB(job.file.size)} → ${formatMB(job.blob.size)}` : "Hazır · gönderim sırası bekleniyor";
+          setCard(job, "queued", job.file.name, note, "Sırada", "uploading");
+        }
+      }
+
+      async function doPrepare(job) {
+        const file = job.file;
+        if (job.state === "queued") setCard(job, "preparing", file.name, "Fotoğraf hazırlanıyor…", "Hazırlanıyor", "uploading");
+        let decoded = null;
+        try {
+          decoded = await decodeImage(file);
+          if (!decoded) { useOriginal(job); return; }  // Örn. Android'de HEIC: olduğu gibi gönder
+          if (!job.thumb) { job.thumb = makeThumb(decoded); showThumb(job); }
+
+          const longEdge = Math.max(decoded.width, decoded.height);
+          const heic = isHeic(file);
+          const keepOriginal = originalToggle.checked
+            ? !heic   // Orijinal modda JPEG/PNG'yi dokunmadan gönder; HEIC'i sunucu okuyamadığı için JPEG'e çevir
+            : !heic && longEdge <= MAX_EDGE && file.size <= SMALL_FILE_BYTES;
+          if (keepOriginal) { useOriginal(job); return; }
+
+          const maxEdge = originalToggle.checked ? ORIGINAL_MAX_EDGE : MAX_EDGE;
+          const scale = Math.min(1, maxEdge / longEdge);
+          const width = Math.max(1, Math.round(decoded.width * scale));
+          const height = Math.max(1, Math.round(decoded.height * scale));
+          workCanvas = workCanvas || document.createElement("canvas");
+          workCanvas.width = width;
+          workCanvas.height = height;
+          const ctx = workCanvas.getContext("2d");
+          ctx.fillStyle = "#fff";             // Saydam PNG'ler siyah olmasın
+          ctx.fillRect(0, 0, width, height);
+          ctx.imageSmoothingQuality = "high";
+          ctx.drawImage(decoded.source, 0, 0, width, height);
+          decoded.close();
+          decoded = null;
+          const blob = await canvasToBlob(workCanvas, "image/jpeg", originalToggle.checked ? 0.95 : JPEG_QUALITY);
+          if (blob && blob.size > 0 && (heic || blob.size < file.size)) {
+            job.blob = blob;
+            job.contentType = "image/jpeg";
+            job.compressed = true;
+          } else {
+            useOriginal(job);
+          }
+        } catch (_) {
+          useOriginal(job);
+        } finally {
+          if (decoded) decoded.close();
+          // Büyük tuval belleğini hemen serbest bırak (iOS toplam tuval sınırı).
+          if (workCanvas) { workCanvas.width = 0; workCanvas.height = 0; }
+        }
+      }
+
+      // ---------- Yükleme ----------
+
       function pumpUploads() {
+        if (!navigator.onLine) { prefetchPrepare(); scheduleCounts(); return; }
         while (activeUploads < MAX_PARALLEL_UPLOADS && uploadQueue.length) {
           const job = uploadQueue.shift();
-          if (job.state === "error") continue;
+          if (job.state !== "queued" && job.state !== "preparing") continue;
           activeUploads += 1;
-          sendFile(job).finally(() => { activeUploads -= 1; pumpUploads(); });
+          runJob(job).finally(() => { activeUploads -= 1; pumpUploads(); });
         }
+        prefetchPrepare();
+      }
+
+      async function runJob(job) {
+        await ensurePrepared(job);
+        await sendFile(job);
+      }
+
+      function isRetryableStatus(status) {
+        return status >= 500 || status === 408 || status === 429;
       }
 
       async function sendFile(job) {
-        setCard(job, "uploading", job.file.name, "Bilgisayara gönderiliyor…", "Yükleniyor");
+        const name = job.file.name;
+        setCard(job, "uploading", name, job.autoRetries ? `Yeniden gönderiliyor (${job.autoRetries}/${RETRY_DELAYS.length})…` : "Bilgisayara gönderiliyor…", "Yükleniyor");
+        const controller = new AbortController();
+        job.controller = controller;
+        job.abortReason = null;
+        job.sendCount += 1;
+        const timeout = setTimeout(() => { job.abortReason = "timeout"; controller.abort(); }, UPLOAD_TIMEOUT_MS);
+        let response = null;
+        let data = {};
         try {
-          const response = await fetch("/api/upload", {
-            method: "POST",
-            headers: { "Content-Type": job.file.type || "image/jpeg" },
-            body: job.file,
-          });
-          const data = await response.json();
-          if (response.status === 409 && data.duplicate) {
-            setCard(
-              job,
-              "duplicate",
-              "Tekrar fotoğraf",
-              `Daha önce yüklendi: ${data.existing_filename || "mevcut fiş"}`,
-              "Atlandı",
-            );
+          let headerName = "";
+          try { headerName = encodeURIComponent(name); } catch (_) { headerName = ""; }
+          const headers = { "Content-Type": job.contentType || "image/jpeg", "X-Orijinal-Boyut": String(job.file.size) };
+          if (headerName) headers["X-Orijinal-Ad"] = headerName;
+          response = await fetch("/api/upload", { method: "POST", headers, body: job.blob, signal: controller.signal });
+          try { data = await response.json(); } catch (_) { data = {}; }
+        } catch (error) {
+          clearTimeout(timeout);
+          job.controller = null;
+          handleFailure(job, job.abortReason === "timeout" ? "Zaman aşımı" : "Bağlantı koptu", true);
+          return;
+        }
+        clearTimeout(timeout);
+        job.controller = null;
+
+        if (response.status === 409 && data.duplicate) {
+          if (job.sendCount > 1 && data.existing_filename) {
+            // Önceki deneme sunucuya ulaşmış ama cevabı kaybolmuş: bu bizim yüklememiz.
+            markUploaded(job, data.existing_filename, null, null);
             return;
           }
-          if (!response.ok) throw new Error(data.error || "Yükleme başarısız");
-          job.filename = data.filename;
-          job.uploadId = data.receipt && data.receipt._yukleme_id;
-          setCard(job, "processing", data.filename, `OCR kuyruğunda · sıra yaklaşık ${data.queue_size || 1}`, "OCR bekliyor");
-          startPolling();
-        } catch (error) {
-          setCard(job, "error", job.file.name, error.message, "Tekrar dene");
+          job.blob = null;
+          setCard(job, "duplicate", "Tekrar fotoğraf", `Daha önce yüklendi: ${data.existing_filename || "mevcut fiş"}`, "Atlandı");
+          return;
         }
+        if (!response.ok) {
+          handleFailure(job, data.error || `Sunucu hatası (${response.status})`, isRetryableStatus(response.status));
+          return;
+        }
+        if (!data.filename) {
+          // Kabul edildi ama yanıt okunamadı; yeniden denemede 409 ile eşleşir.
+          handleFailure(job, "Sunucu yanıtı okunamadı", true);
+          return;
+        }
+        markUploaded(job, data.filename, data.receipt && data.receipt._yukleme_id, data.queue_size);
+      }
+
+      function markUploaded(job, filename, uploadId, queueSize) {
+        if (job.compressed && job.blob) savedBytes += Math.max(0, job.file.size - job.blob.size);
+        job.blob = null;  // Gönderilen sıkıştırılmış kopyayı bellekte tutma
+        job.filename = filename;
+        job.uploadId = uploadId || null;
+        setCard(job, "processing", filename, `OCR kuyruğunda${queueSize ? ` · sıra yaklaşık ${queueSize}` : ""}`, "OCR bekliyor");
+        startPolling();
+      }
+
+      function requeue(job, front = true) {
+        if (job.retryTimer) { clearTimeout(job.retryTimer); job.retryTimer = null; }
+        job.waitOnline = false;
+        job.state = "queued";
+        setCard(job, "queued", job.file.name, "Sırada", "Sırada", "uploading");
+        if (front) uploadQueue.unshift(job); else uploadQueue.push(job);
+      }
+
+      function handleFailure(job, message, retryable) {
+        if (job.abortReason === "resume") {
+          // Sayfa arka plandan döndü ve askıdaki istek iptal edildi: hak harcamadan yeniden dene.
+          requeue(job);
+          return;
+        }
+        if (retryable && !navigator.onLine) {
+          job.waitOnline = true;
+          setCard(job, "retrywait", job.file.name, "Bağlantı bekleniyor; gelince otomatik gönderilecek", "Bekliyor", "uploading");
+          return;
+        }
+        if (retryable && job.autoRetries < RETRY_DELAYS.length) {
+          const delay = RETRY_DELAYS[job.autoRetries];
+          job.autoRetries += 1;
+          setCard(job, "retrywait", job.file.name, `${message} · ${Math.round(delay / 1000)} sn sonra tekrar denenecek (${job.autoRetries}/${RETRY_DELAYS.length})`, "Bekliyor", "uploading");
+          job.retryTimer = setTimeout(() => {
+            job.retryTimer = null;
+            if (job.state !== "retrywait") return;
+            requeue(job);
+            pumpUploads();
+          }, delay);
+          return;
+        }
+        // Kalıcı hata: bellekteki sıkıştırılmış kopyayı bırak, elle denemede yeniden hazırlanır.
+        job.blob = null;
+        setCard(job, "error", job.file.name, message, "Tekrar dene");
       }
 
       function retry(id) {
         const job = jobs.get(id);
         if (!job || job.state !== "error") return;
-        job.state = "uploading";
-        uploadQueue.push(job);
-        updateCounts();
+        job.autoRetries = 0;
+        requeue(job, false);
         pumpUploads();
       }
+
+      function retryAllFailed() {
+        let count = 0;
+        for (const job of jobs.values()) {
+          if (job.state === "error") { job.autoRetries = 0; requeue(job, false); count += 1; }
+        }
+        if (count) toast(`${count} fotoğraf yeniden kuyruğa alındı`);
+        pumpUploads();
+      }
+
+      function resumeWaiting() {
+        for (const job of jobs.values()) {
+          if (job.state === "retrywait" && (job.waitOnline || job.retryTimer)) requeue(job);
+        }
+        pumpUploads();
+      }
+
+      // ---------- OCR sonuçları ----------
 
       function renderReceipt(job, receipt) {
         if (receipt._isleniyor) return;
@@ -242,34 +625,43 @@
           setCard(job, "duplicate", title, receipt._tekrar_nedeni || "Aynı fiş no daha önce yüklendi", "Tekrar fiş");
           return;
         }
-        const stateClass = receipt._kontrol_gerekli ? "suspicious" : "ok";
-        setCard(job, "done", title, detail, receipt._kontrol_gerekli ? "Kontrol gerekli" : "Tamam");
-        job.card.querySelector(".upload-status").className = `upload-status ${stateClass}`;
+        setCard(job, "done", title, detail, receipt._kontrol_gerekli ? "Kontrol gerekli" : "Tamam", receipt._kontrol_gerekli ? "suspicious" : "ok");
       }
 
+      let pollInFlight = false;
       async function pollResults() {
-        const waiting = [...jobs.values()].filter((job) => job.state === "processing" && job.filename);
-        if (!waiting.length) { stopPolling(); return; }
+        const waiting = [];
+        for (const job of jobs.values()) if (job.state === "processing" && job.filename) waiting.push(job);
+        if (!waiting.length) { if (!hasPendingUploads()) stopPolling(); return; }
+        if (pollInFlight || document.visibilityState === "hidden") return;
+        pollInFlight = true;
         try {
           const response = await fetch("/api/receipts", { cache: "no-store" });
           if (!response.ok) throw new Error("Sonuçlar alınamadı");
           const data = await response.json();
-          waiting.forEach((job) => {
-            const receipt = data.receipts.find((item) =>
-              (job.uploadId && item._yukleme_id === job.uploadId) || item._dosya === job.filename
-            );
-            if (receipt) {
-              if (receipt._dosya !== job.filename && !receipt._isleniyor) job.filename = receipt._dosya;
-              renderReceipt(job, receipt);
-            }
-          });
-        } catch (_) { /* Geçici ağ kesintisinde sıradaki yoklamayı bekle. */ }
+          const byUploadId = new Map();
+          const byFile = new Map();
+          for (const item of data.receipts || []) {
+            if (item._yukleme_id) byUploadId.set(item._yukleme_id, item);
+            if (item._dosya) byFile.set(item._dosya, item);
+          }
+          for (const job of waiting) {
+            const receipt = (job.uploadId && byUploadId.get(job.uploadId)) || byFile.get(job.filename);
+            if (!receipt) continue;
+            if (receipt._dosya && receipt._dosya !== job.filename && !receipt._isleniyor) job.filename = receipt._dosya;
+            renderReceipt(job, receipt);
+          }
+        } catch (_) {
+          /* Geçici ağ kesintisinde sıradaki yoklamayı bekle. */
+        } finally {
+          pollInFlight = false;
+        }
       }
 
       function startPolling() {
         if (pollTimer) return;
-        pollResults();
         pollTimer = setInterval(pollResults, 2000);
+        setTimeout(pollResults, 600);
       }
 
       function stopPolling() {
@@ -283,13 +675,53 @@
         })[character]);
       }
 
+      // ---------- Olaylar ----------
+
       document.getElementById("shootButton").addEventListener("click", () => cameraInput.click());
       document.getElementById("nextButton").addEventListener("click", () => cameraInput.click());
-      document.getElementById("galleryButton").addEventListener("click", () => galleryInput.click());
+      // iOS seçiciden sonra HEIC→JPEG dönüşümünü change olayından ÖNCE yapar;
+      // çok fotoğrafta bu uzun sürer. Kullanıcı donma sanmasın diye bekleme katmanı göster.
+      const pickerOverlay = document.getElementById("pickerOverlay");
+      let pickerFocusTimer = null;
+      function showPickerOverlay() { clearTimeout(pickerFocusTimer); pickerOverlay.classList.remove("hidden"); }
+      function hidePickerOverlay() { clearTimeout(pickerFocusTimer); pickerOverlay.classList.add("hidden"); }
+      document.getElementById("pickerOverlayClose").addEventListener("click", hidePickerOverlay);
+      galleryInput.addEventListener("cancel", hidePickerOverlay);
+      window.addEventListener("focus", () => {
+        if (pickerOverlay.classList.contains("hidden")) return;
+        // Odak dönüşü dönüşüm bitmeden gelebilir; kısa süre bekle, hâlâ dosya yoksa kapat.
+        clearTimeout(pickerFocusTimer);
+        pickerFocusTimer = setTimeout(() => {
+          if (!galleryInput.files || !galleryInput.files.length) hidePickerOverlay();
+        }, 3000);
+      });
+      document.getElementById("galleryButton").addEventListener("click", () => { showPickerOverlay(); galleryInput.click(); });
+      retryAllButton.addEventListener("click", retryAllFailed);
       cameraInput.addEventListener("change", () => { addFiles(cameraInput.files || []); cameraInput.value = ""; });
-      galleryInput.addEventListener("change", () => { addFiles(galleryInput.files || []); galleryInput.value = ""; });
-      window.addEventListener("online", () => { updateCounts(); pumpUploads(); });
-      window.addEventListener("offline", updateCounts);
+      galleryInput.addEventListener("change", () => { hidePickerOverlay(); addFiles(galleryInput.files || []); galleryInput.value = ""; });
+      window.addEventListener("online", () => { scheduleCounts(); resumeWaiting(); });
+      window.addEventListener("offline", scheduleCounts);
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "hidden") { hiddenAt = Date.now(); return; }
+        const hiddenFor = hiddenAt ? Date.now() - hiddenAt : 0;
+        hiddenAt = 0;
+        if (hiddenFor > RESUME_ABORT_AFTER_MS) {
+          // iOS arka planda istekleri askıya alır/öldürür; askıda kalanları iptal edip yeniden gönder.
+          for (const job of jobs.values()) {
+            if (job.state === "uploading" && job.controller) { job.abortReason = "resume"; job.controller.abort(); }
+          }
+        }
+        updateCounts();
+        resumeWaiting();
+        if (pollTimer) pollResults();
+      });
+      window.addEventListener("pageshow", () => { updateCounts(); pumpUploads(); });
+      window.addEventListener("beforeunload", (event) => {
+        if (!hasPendingUploads()) return;
+        event.preventDefault();
+        event.returnValue = "Yüklemeler henüz bitmedi.";
+        return event.returnValue;
+      });
       updateCounts();
     </script>
   </body>

@@ -27,6 +27,9 @@
         <a class="button subtle" href="/cek" title="Telefondan fiş fotoğrafı çek">
           <span aria-hidden="true">📷</span> Fiş Çek
         </a>
+        <button class="button subtle" id="bulkButton" type="button" title="Bilgisayardan çok sayıda fiş fotoğrafını birden ekle">
+          <span aria-hidden="true">🗂</span> Toplu Ekle
+        </button>
         <button class="button subtle" id="exportButton" type="button" title="Onaylı fişleri Excel defterine aktar">
           <span aria-hidden="true">📊</span> Excel'e Aktar
         </button>
@@ -229,6 +232,61 @@
         <div class="modal-actions">
           <button class="button secondary" id="partyCancel" type="button">İptal</button>
           <button class="button primary" id="partyConfirm" type="button">Partiyi arşivle ve yenisini aç</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop hidden" id="bulkModal">
+      <div class="modal bulk-modal">
+        <div class="modal-head">
+          <div>
+            <span class="eyebrow">TOPLU EKLEME</span>
+            <h2>Fiş fotoğraflarını ekle</h2>
+          </div>
+          <button class="icon-button" id="bulkClose" type="button" title="Kapat">✕</button>
+        </div>
+
+        <div class="modal-body">
+          <div class="drop-zone" id="bulkDrop" tabindex="0">
+            <strong>Fotoğrafları veya klasörü buraya sürükle</strong>
+            <small>JPG, PNG, HEIC, WEBP, BMP · alt klasörler de taranır · aynı fotoğraf ikinci kez eklenmez</small>
+            <div class="drop-buttons">
+              <button class="button secondary" id="bulkPickFiles" type="button">Dosya seç</button>
+              <button class="button secondary" id="bulkPickFolder" type="button">Klasör seç</button>
+            </div>
+            <input type="file" id="bulkFiles" accept="image/*,.heic,.heif" multiple hidden />
+            <input type="file" id="bulkFolder" webkitdirectory directory multiple hidden />
+          </div>
+
+          <div class="bulk-progress hidden" id="bulkProgress">
+            <div class="progress-copy">
+              <span id="bulkProgressText">0 / 0</span>
+              <span id="bulkProgressPercent">%0</span>
+            </div>
+            <div class="progress"><span id="bulkProgressBar"></span></div>
+            <div class="bulk-counts">
+              <span class="ok">Yüklendi <b id="bulkOk">0</b></span>
+              <span class="dup">Tekrar <b id="bulkDup">0</b></span>
+              <span class="err">Hata <b id="bulkErr">0</b></span>
+            </div>
+            <small class="bulk-errors hidden" id="bulkErrors"></small>
+          </div>
+
+          <div class="auto-excel-note inbox-note">
+            <strong>Gelen kutusu klasörü</strong>
+            <p>Bu klasöre atılan fotoğraflar birkaç saniye içinde kendiliğinden eklenir. Telefondaki fotoğrafları Google Fotoğraflar / OneDrive / iCloud klasörünü buraya senkronlayarak veya USB ile kopyalayarak da getirebilirsin. Eklenenler <code>_islendi</code>, tekrarlar <code>_tekrar</code> klasörüne taşınır; hiçbir dosya silinmez.</p>
+            <div class="inbox-row">
+              <code id="inboxPath">—</code>
+              <button class="button secondary" id="inboxOpen" type="button">Klasörü aç</button>
+            </div>
+            <small id="inboxStatus"></small>
+          </div>
+
+          <p class="modal-error hidden" id="bulkError"></p>
+        </div>
+
+        <div class="modal-actions">
+          <button class="button secondary" id="bulkCancel" type="button">Kapat</button>
         </div>
       </div>
     </div>

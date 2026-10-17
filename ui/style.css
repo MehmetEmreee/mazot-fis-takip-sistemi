@@ -241,3 +241,23 @@ kbd { padding: 1px 4px; border: 1px solid #ccd3ce; border-bottom-width: 2px; bor
   cursor: pointer;
   flex: none;
 }
+
+/* Toplu ekleme penceresi */
+.bulk-modal { width: min(620px, 100%); }
+.drop-zone { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 26px 16px; border: 2px dashed #b9d7c8; border-radius: 14px; background: #f8faf9; text-align: center; transition: .15s ease; outline: none; }
+.drop-zone strong { color: var(--green-dark); font-size: 14px; }
+.drop-zone small { color: var(--muted); font-size: 11px; }
+.drop-zone.dragover, .drop-zone:focus-visible { border-color: var(--green); background: var(--green-soft); }
+.drop-zone.busy { opacity: .7; pointer-events: none; }
+.drop-buttons { display: flex; gap: 8px; margin-top: 8px; }
+.bulk-progress { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; }
+.bulk-counts { display: flex; gap: 14px; font-size: 12px; color: var(--muted); }
+.bulk-counts b { color: var(--ink); }
+.bulk-counts .ok b { color: var(--green-dark); }
+.bulk-counts .dup b { color: #70429a; }
+.bulk-counts .err b { color: #8a3328; }
+.bulk-errors { max-height: 90px; overflow-y: auto; color: #8a3328; font-size: 10px; line-height: 1.5; white-space: pre-line; }
+.inbox-note code { font: 11px ui-monospace, monospace; }
+.inbox-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.inbox-row code { flex: 1; min-width: 0; padding: 8px 10px; overflow: hidden; border: 1px solid #d5e7dd; border-radius: 8px; background: #fff; color: var(--ink); text-overflow: ellipsis; white-space: nowrap; }
+.inbox-row .button { min-height: 34px; flex: none; }

@@ -9,12 +9,15 @@ Arayüz varsayılan olarak http://127.0.0.1:8765 adresinde açılır.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import mimetypes
 import os
 import queue
 import re
+import shutil
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -34,16 +37,56 @@ import excel_aktar  # noqa: E402
 import excel_ogrenme  # noqa: E402
 import parti_yonetimi  # noqa: E402
 
+try:  # iPhone HEIC fotoğraflarını Pillow ile açabilmek için (pillow-heif)
+    from pillow_heif import register_heif_opener
+
+    register_heif_opener()
+except ImportError:
+    pass
+
 ROOT = Path(__file__).resolve().parent
 UI_DIR = ROOT / "ui"
 DATA_FILE = ROOT / "sonuclar.json"
 FISLER_DIR = ROOT / "fisler"
+# Toplu ekleme "gelen kutusu": buraya atılan/senkronlanan fotoğraflar
+# otomatik olarak OCR kuyruğuna alınır (uygulama.py paketli exe için değiştirir).
+GELEN_DIR = ROOT / "gelen_fisler"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 EDITABLE_FIELDS = ("fis_no", "tarih", "firma", "plaka", "ad_soyad", "km", "litre")
 MAX_UPLOAD_BYTES = 30 * 1024 * 1024  # 30MB güvenlik sınırı
 DATA_LOCK = threading.Lock()
 OCR_QUEUE: queue.Queue[tuple[Path, str]] = queue.Queue()
 IMAGE_HASHES: dict[str, str] = {}
+
+GELEN_ISLENDI = "_islendi"
+GELEN_TEKRAR = "_tekrar"
+GELEN_HATALI = "_hatali"
+GELEN_ALT_KLASORLER = {GELEN_ISLENDI, GELEN_TEKRAR, GELEN_HATALI}
+# Henüz yazılmakta olan / yarım inmiş dosyaların adlarında görülen ekler.
+GELEN_YARIM_EKLER = (".tmp", ".part", ".crdownload", ".partial", ".download")
+GELEN_TARAMA_ARALIGI_SN = 3.0
+# LocalSend gibi uygulamalar dosyayı yerinde yazar; yarım görsel bu süre
+# boyunca hiç değişmezse bozuk sayılıp _hatali/'ya taşınır.
+GELEN_EKSIK_BEKLEME_SN = 120.0
+# iPhone fotoğrafları: sadece Pillow açabiliyorsa JPEG'e çevrilip alınır.
+HEIC_UZANTILARI = {".heic", ".heif"}
+HEIF_MARKALARI = {b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx", b"mif1", b"msf1"}
+GELEN_UZANTILARI = IMAGE_EXTENSIONS | HEIC_UZANTILARI
+# Klasör izleyicisinin son durumu; /api/gelen buradan okur.
+GELEN_DURUM: dict = {}
+
+ORIJINAL_AD_SINIRI = 120
+KAYNAKLAR = {"telefon", "toplu", "klasor"}
+CONTENT_TYPE_UZANTILARI = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/pjpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/bmp": ".bmp",
+    "image/x-bmp": ".bmp",
+    "image/x-ms-bmp": ".bmp",
+}
 
 
 def lan_ip() -> str:
@@ -210,6 +253,139 @@ def hash_indeksini_hazirla() -> None:
                 continue
 
 
+def orijinal_adi_temizle(ad, url_cozumle: bool = False) -> str | None:
+    """X-Orijinal-Ad başlığından/dosya adından güvenli, kısa bir ad çıkarır.
+    Klasör kısmı atılır; sadece kayıtta bilgi olarak saklanır. HTTP başlığı
+    URL-kodlu geldiği için handler url_cozumle=True ile çağırır."""
+    if not ad or not isinstance(ad, str):
+        return None
+    metin = unquote(ad) if url_cozumle else ad
+    metin = metin.replace("\\", "/")
+    metin = Path(metin).name.strip()
+    metin = re.sub(r"[\x00-\x1f\x7f]", "", metin)
+    if not metin or metin in (".", ".."):
+        return None
+    if len(metin) > ORIJINAL_AD_SINIRI:
+        uzanti = Path(metin).suffix[:10]
+        metin = metin[: ORIJINAL_AD_SINIRI - len(uzanti)] + uzanti
+    return metin
+
+
+def uzanti_belirle(content_type: str | None, orijinal_ad: str | None = None) -> str | None:
+    """Content-Type'tan uzantı seçer; bilinmiyorsa orijinal adın uzantısına
+    bakar. Hiçbir ipucu yoksa eski davranış gibi .jpg varsayılır."""
+    tur = (content_type or "").split(";")[0].strip().lower()
+    if tur in CONTENT_TYPE_UZANTILARI:
+        return CONTENT_TYPE_UZANTILARI[tur]
+    if orijinal_ad:
+        uzanti = Path(orijinal_ad).suffix.lower()
+        if uzanti:
+            return uzanti
+    if tur in ("", "application/octet-stream"):
+        return ".jpg"
+    return None
+
+
+def imza_uzantisi(data: bytes) -> str | None:
+    """Dosyanın ilk baytlarından gerçek görsel türünü bulur (uzantı yanlış
+    olsa bile doğru uzantıyla kaydetmek için)."""
+    if data[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return ".png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp"
+    if data[:2] == b"BM":
+        return ".bmp"
+    if data[4:8] == b"ftyp" and data[8:12] in HEIF_MARKALARI:
+        return ".heic"
+    return None
+
+
+def fotografi_kabul_et(data: bytes, ext: str | None, orijinal_ad: str | None = None,
+                       kaynak: str = "telefon") -> dict:
+    """Bir fiş fotoğrafını temp/ klasörüne kaydeder, "işleniyor" kaydını
+    sonuclar.json'a ekler ve OCR kuyruğuna koyar.
+
+    Dönüş: {"ok": True, "filename", "receipt", "queue_size"} veya özdeş
+    fotoğraf için {"ok": False, "duplicate": True, "existing_filename"}.
+    Boş/çok büyük/desteklenmeyen dosyada ValueError, diske yazılamazsa
+    OSError fırlatır. Telefon sayfası, masaüstü toplu ekleme ve gelen kutusu
+    klasörü aynı yolu kullanır.
+    """
+    if not data:
+        raise ValueError("Boş yükleme")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise ValueError("Dosya çok büyük (30MB sınırı)")
+    ext = (ext or "").lower()
+    if ext in (".jpe", ".jfif"):
+        ext = ".jpg"
+    ext = imza_uzantisi(data) or ext
+    if ext in HEIC_UZANTILARI:
+        # Tarayıcılar HEIC gösteremez; arşivde ve arayüzde JPEG olarak tut.
+        data, ext = heic_jpege_cevir(data), ".jpg"
+    if ext not in IMAGE_EXTENSIONS:
+        raise ValueError(
+            f"Desteklenmeyen dosya türü ({ext or 'bilinmiyor'}); "
+            "JPG, PNG, WEBP veya BMP olmalı"
+        )
+    orijinal_ad = orijinal_adi_temizle(orijinal_ad)
+    kaynak = kaynak if kaynak in KAYNAKLAR else "telefon"
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+    upload_id = uuid.uuid4().hex
+    filename = f"fis_{ts}_{upload_id[:6]}{ext}"
+    dest = temp_dir() / filename
+    image_hash = hashlib.sha256(data).hexdigest()
+    with DATA_LOCK:
+        onceki_dosya = IMAGE_HASHES.get(image_hash)
+        if onceki_dosya:
+            return {"ok": False, "duplicate": True, "existing_filename": onceki_dosya}
+        # Eşzamanlı özdeş isteklerin ikisinin de kabul edilmesini önle.
+        IMAGE_HASHES[image_hash] = filename
+    try:
+        dest.write_bytes(data)
+    except OSError:
+        with DATA_LOCK:
+            if IMAGE_HASHES.get(image_hash) == filename:
+                IMAGE_HASHES.pop(image_hash, None)
+        raise
+
+    kayit = {
+        "_dosya": filename,
+        "_isleniyor": True,
+        "_yukleme_id": upload_id,
+        "_dosya_hash": image_hash,
+        "_yukleme_zamani": datetime.now().isoformat(timespec="seconds"),
+        "_kaynak": kaynak,
+        "_kontrol_gerekli": True,
+        "_kontrol_nedeni": "OCR kuyruğunda",
+    }
+    if orijinal_ad:
+        kayit["_orijinal_ad"] = orijinal_ad
+    record = fis_normalize_et(kayit)
+    try:
+        with DATA_LOCK:
+            receipts = load_receipts()
+            receipts.append(record)
+            save_receipts(receipts)
+    except (OSError, ValueError):
+        # Kayıt yazılamadıysa yarım kalmış dosyayı ve hash'i geri al.
+        with DATA_LOCK:
+            if IMAGE_HASHES.get(image_hash) == filename:
+                IMAGE_HASHES.pop(image_hash, None)
+        dest.unlink(missing_ok=True)
+        raise
+
+    OCR_QUEUE.put((dest, image_hash))
+    return {
+        "ok": True,
+        "filename": filename,
+        "receipt": record,
+        "queue_size": OCR_QUEUE.qsize(),
+    }
+
+
 def ocr_worker() -> None:
     """Yüklenen görselleri arka planda, GPU'yu yormadan tek tek işler."""
     while True:
@@ -261,8 +437,12 @@ def ocr_worker() -> None:
                     receipts.append(record)
                     index = len(receipts) - 1
                 else:
-                    record["_yukleme_zamani"] = receipts[index].get("_yukleme_zamani")
-                    record["_yukleme_id"] = receipts[index].get("_yukleme_id")
+                    onceki = receipts[index]
+                    record["_yukleme_zamani"] = onceki.get("_yukleme_zamani")
+                    record["_yukleme_id"] = onceki.get("_yukleme_id")
+                    for anahtar in ("_orijinal_ad", "_kaynak"):
+                        if onceki.get(anahtar):
+                            record[anahtar] = onceki[anahtar]
                     receipts[index] = record
 
                 IMAGE_HASHES[image_hash] = record.get("_dosya", original_name)
@@ -283,6 +463,232 @@ def ocr_worker() -> None:
                 save_receipts(receipts)
         finally:
             OCR_QUEUE.task_done()
+
+
+def _gelen_yarim_mi(ad: str) -> bool:
+    """Gizli dosyalar ve indirme/kopyalama sırasında oluşan geçici adlar."""
+    kucuk = ad.lower()
+    return (
+        kucuk.startswith(".") or kucuk.startswith("~")
+        or kucuk.endswith(GELEN_YARIM_EKLER)
+    )
+
+
+def gelen_dosyalarini_listele(kok: Path | None = None) -> list[Path]:
+    """Gelen kutusundaki aktarılmayı bekleyen görselleri ada göre sıralı
+    döndürür (_islendi/_tekrar/_hatali ve gizli klasörler hariç)."""
+    kok = kok or GELEN_DIR
+    if not kok.is_dir():
+        return []
+    bulunan: list[Path] = []
+    for klasor, alt_klasorler, dosyalar in os.walk(kok):
+        klasor_yolu = Path(klasor)
+        alt_klasorler[:] = [
+            ad for ad in alt_klasorler
+            if not ad.startswith(".")
+            and not (klasor_yolu == kok and ad.lower() in GELEN_ALT_KLASORLER)
+        ]
+        for ad in dosyalar:
+            if _gelen_yarim_mi(ad):
+                continue
+            if Path(ad).suffix.lower() not in GELEN_UZANTILARI:
+                continue
+            bulunan.append(klasor_yolu / ad)
+    bulunan.sort(key=lambda yol: yol.relative_to(kok).as_posix().lower())
+    return bulunan
+
+
+def goruntu_tam_mi(data: bytes) -> bool:
+    """Aktarımı bitmemiş (sonu kesik) görselleri yakalar. JPEG'de dosya
+    EOI işaretiyle (FF D9, sonrasında sıfır dolgu olabilir) bitmeli; diğer
+    türlerde Pillow'un verify() kontrolünden geçmeli."""
+    tur = imza_uzantisi(data)
+    if tur == ".jpg":
+        return data.rstrip(b"\x00").endswith(b"\xff\xd9")
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as resim:
+            if tur == ".heic":
+                # HEIF'te verify() yalnız başlığa bakar; yarım dosyayı ancak
+                # tam çözme yakalar.
+                resim.load()
+            else:
+                resim.verify()
+        return True
+    except Exception:
+        return False
+
+
+def heic_jpege_cevir(data: bytes) -> bytes:
+    """HEIC/HEIF'i Pillow açabiliyorsa JPEG'e çevirir; açamıyorsa ValueError.
+    (pillow-heif kurulu değilse iPhone fotoğrafları açılamaz.)"""
+    try:
+        from PIL import Image, ImageOps
+
+        with Image.open(io.BytesIO(data)) as resim:
+            resim = ImageOps.exif_transpose(resim).convert("RGB")
+            cikti = io.BytesIO()
+            resim.save(cikti, "JPEG", quality=95)
+            return cikti.getvalue()
+    except Exception as exc:
+        raise ValueError(
+            "HEIC/HEIF fotoğrafı açılamadı (desteklenmiyor); telefonda "
+            "'En Uyumlu' (JPG) biçimini seç veya JPG olarak gönder"
+        ) from exc
+
+
+def _gelen_tasi(yol: Path, alt_klasor: str) -> Path:
+    """Kullanıcının dosyasını silmeden gelen kutusunun alt klasörüne taşır."""
+    hedef_klasor = GELEN_DIR / alt_klasor
+    if alt_klasor == GELEN_ISLENDI:
+        hedef_klasor = hedef_klasor / datetime.now().strftime("%Y-%m-%d")
+    hedef_klasor.mkdir(parents=True, exist_ok=True)
+    hedef = hedef_klasor / yol.name
+    if hedef.exists():
+        hedef = benzersiz_hedef(hedef_klasor, yol.stem, yol.suffix)
+    shutil.move(str(yol), str(hedef))
+    return hedef
+
+
+def gelen_klasoru_tara(durum: dict) -> dict:
+    """Gelen kutusunu bir kez tarar.
+
+    Bir dosya ancak iki ardışık taramada boyutu ve değişiklik zamanı aynı
+    kaldıysa aktarılır (senkron istemcisi veya kopyalama hâlâ yazıyor
+    olabilir). `durum` taramalar arasında saklanan sözlüktür; testler için
+    dışarıdan verilir. Bu geçişin özetini döndürür.
+    """
+    GELEN_DIR.mkdir(parents=True, exist_ok=True)
+    gorulen: dict[str, tuple[int, int]] = durum.setdefault("gorulen", {})
+    tasinacak: dict[str, str] = durum.setdefault("tasinacak", {})
+    eksik: dict[str, tuple[tuple[int, int], float]] = durum.setdefault("eksik", {})
+    bugun = datetime.now().strftime("%Y-%m-%d")
+    if durum.get("gun") != bugun:
+        durum["gun"] = bugun
+        durum["son_aktarilan"] = 0
+    ozet = {"aktarilan": 0, "tekrar": 0, "hatali": 0}
+    islenen: set[str] = set()
+
+    # Önceki geçişte kabul edilip taşınamayan dosyalar (ör. Windows kilidi).
+    for yol_metni, alt_klasor in list(tasinacak.items()):
+        yol = Path(yol_metni)
+        if not yol.exists():
+            tasinacak.pop(yol_metni, None)
+            continue
+        try:
+            _gelen_tasi(yol, alt_klasor)
+            tasinacak.pop(yol_metni, None)
+        except OSError:
+            pass
+
+    simdiki: dict[str, tuple[int, int]] = {}
+    hazir: list[Path] = []
+    for yol in gelen_dosyalarini_listele():
+        anahtar = str(yol)
+        if anahtar in tasinacak:
+            continue
+        try:
+            bilgi = yol.stat()
+        except OSError:
+            continue
+        imza = (bilgi.st_size, bilgi.st_mtime_ns)
+        simdiki[anahtar] = imza
+        if bilgi.st_size > 0 and gorulen.get(anahtar) == imza:
+            hazir.append(yol)
+    durum["gorulen"] = gorulen = simdiki
+    for anahtar in list(eksik):
+        if anahtar not in simdiki:
+            eksik.pop(anahtar, None)
+
+    for yol in hazir:
+        anahtar = str(yol)
+        try:
+            if yol.stat().st_size > MAX_UPLOAD_BYTES:
+                raise ValueError("Dosya çok büyük (30MB sınırı)")
+            data = yol.read_bytes()
+        except PermissionError:
+            # Başka bir program hâlâ tutuyor; iki sağlam taramayı yeniden bekle.
+            gorulen.pop(anahtar, None)
+            continue
+        except FileNotFoundError:
+            gorulen.pop(anahtar, None)
+            continue
+        except (OSError, ValueError) as exc:
+            sonuc = {"hata": str(exc)}
+        else:
+            uzanti = yol.suffix.lower()
+            if not goruntu_tam_mi(data):
+                # Büyük ihtimalle hâlâ aktarılıyor: dokunma, sonraki taramada
+                # yeniden bak. Uzun süre hiç değişmeden yarım kalırsa bozuktur.
+                imza = simdiki[anahtar]
+                onceki = eksik.get(anahtar)
+                if onceki is None or onceki[0] != imza:
+                    eksik[anahtar] = (imza, time.monotonic())
+                    continue
+                if time.monotonic() - onceki[1] < GELEN_EKSIK_BEKLEME_SN:
+                    continue
+                sonuc = {"hata": "Görsel eksik/bozuk (aktarım tamamlanmamış olabilir)"}
+            else:
+                try:
+                    if uzanti in HEIC_UZANTILARI:
+                        data, uzanti = heic_jpege_cevir(data), ".jpg"
+                    sonuc = fotografi_kabul_et(
+                        data, uzanti, orijinal_ad=yol.name, kaynak="klasor"
+                    )
+                except ValueError as exc:
+                    sonuc = {"hata": str(exc)}
+                except OSError as exc:
+                    # Sorun bizim tarafta (disk/kayıt); dosyaya dokunma, sonra dene.
+                    print(f"Gelen kutusu: {yol.name} kaydedilemedi: {exc}")
+                    gorulen.pop(anahtar, None)
+                    continue
+        eksik.pop(anahtar, None)
+
+        if sonuc.get("ok"):
+            alt_klasor, sayac = GELEN_ISLENDI, "aktarilan"
+        elif sonuc.get("duplicate"):
+            alt_klasor, sayac = GELEN_TEKRAR, "tekrar"
+        else:
+            alt_klasor, sayac = GELEN_HATALI, "hatali"
+            print(f"Gelen kutusu: {yol.name} aktarılamadı: {sonuc.get('hata')}")
+        ozet[sayac] += 1
+        islenen.add(anahtar)
+        gorulen.pop(anahtar, None)
+        try:
+            _gelen_tasi(yol, alt_klasor)
+        except OSError:
+            tasinacak[anahtar] = alt_klasor
+
+    durum["son_aktarilan"] = durum.get("son_aktarilan", 0) + ozet["aktarilan"]
+    durum["bekleyen"] = len([y for y in simdiki if y not in islenen])
+    if any(ozet.values()):
+        print(
+            f"Gelen kutusu: {ozet['aktarilan']} fotoğraf kuyruğa alındı"
+            + (f", {ozet['tekrar']} tekrar" if ozet["tekrar"] else "")
+            + (f", {ozet['hatali']} hatalı" if ozet["hatali"] else "")
+        )
+    return ozet
+
+
+def gelen_izleyici() -> None:
+    """Gelen kutusunu birkaç saniyede bir tarayan arka plan iş parçacığı."""
+    while True:
+        try:
+            gelen_klasoru_tara(GELEN_DURUM)
+        except Exception as exc:  # izleyici hiçbir hatada durmamalı
+            print(f"Gelen kutusu taranamadı: {exc}")
+        time.sleep(GELEN_TARAMA_ARALIGI_SN)
+
+
+def klasoru_ac(yol: Path) -> None:
+    """Klasörü işletim sisteminin dosya yöneticisinde açar."""
+    if sys.platform.startswith("win"):
+        os.startfile(str(yol))  # type: ignore[attr-defined]
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(yol)])
+    else:
+        subprocess.Popen(["xdg-open", str(yol)])
 
 
 def find_image(filename: str, images_dir: Path | None = None) -> Path | None:
@@ -328,6 +734,22 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
 
         if parsed.path == "/api/partiler":
             self.send_json({"partiler": parti_yonetimi.partileri_listele()})
+            return
+
+        if parsed.path == "/api/gelen":
+            if "bekleyen" in GELEN_DURUM:
+                bekleyen = GELEN_DURUM["bekleyen"]
+            else:
+                bekleyen = len(gelen_dosyalarini_listele())
+            bugun = datetime.now().strftime("%Y-%m-%d")
+            self.send_json({
+                "klasor": str(GELEN_DIR),
+                "bekleyen": bekleyen,
+                "son_aktarilan": (
+                    GELEN_DURUM.get("son_aktarilan", 0)
+                    if GELEN_DURUM.get("gun") == bugun else 0
+                ),
+            })
             return
 
         if parsed.path == "/api/receipts":
@@ -440,6 +862,8 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
             self.handle_save()
         elif path == "/api/upload":
             self.handle_upload()
+        elif path == "/api/gelen/ac":
+            self.handle_gelen_ac()
         elif path == "/api/delete":
             self.handle_delete()
         elif path == "/api/export-excel":
@@ -547,37 +971,12 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
                 raise ValueError("Dosya çok büyük (30MB sınırı)")
             data = self.rfile.read(length)
 
-            content_type = self.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
-            ext = mimetypes.guess_extension(content_type) or ".jpg"
-            if ext in (".jpe", ".jfif"):
-                ext = ".jpg"
-
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-            upload_id = uuid.uuid4().hex
-            filename = f"fis_{ts}_{upload_id[:6]}{ext}"
-            dest = temp_dir() / filename
-            image_hash = hashlib.sha256(data).hexdigest()
-            with DATA_LOCK:
-                onceki_dosya = IMAGE_HASHES.get(image_hash)
-                if onceki_dosya:
-                    self.send_json(
-                        {
-                            "error": "Bu fotoğraf daha önce yüklendi",
-                            "duplicate": True,
-                            "existing_filename": onceki_dosya,
-                        },
-                        HTTPStatus.CONFLICT,
-                    )
-                    return
-                # Eşzamanlı özdeş isteklerin ikisinin de kabul edilmesini önle.
-                IMAGE_HASHES[image_hash] = filename
-            try:
-                dest.write_bytes(data)
-            except OSError:
-                with DATA_LOCK:
-                    if IMAGE_HASHES.get(image_hash) == filename:
-                        IMAGE_HASHES.pop(image_hash, None)
-                raise
+            orijinal_ad = orijinal_adi_temizle(
+                self.headers.get("X-Orijinal-Ad"), url_cozumle=True
+            )
+            ext = uzanti_belirle(self.headers.get("Content-Type"), orijinal_ad)
+            kaynak = (self.headers.get("X-Kaynak") or "telefon").strip().lower()
+            sonuc = fotografi_kabul_et(data, ext, orijinal_ad, kaynak=kaynak)
         except ValueError as exc:
             self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             return
@@ -585,30 +984,34 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
             self.send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
             return
 
-        record = fis_normalize_et({
-            "_dosya": filename,
-            "_isleniyor": True,
-            "_yukleme_id": upload_id,
-            "_dosya_hash": image_hash,
-            "_yukleme_zamani": datetime.now().isoformat(timespec="seconds"),
-            "_kontrol_gerekli": True,
-            "_kontrol_nedeni": "OCR kuyruğunda",
-        })
-        with DATA_LOCK:
-            receipts = load_receipts()
-            receipts.append(record)
-            save_receipts(receipts)
+        if sonuc.get("duplicate"):
+            self.send_json(
+                {
+                    "error": "Bu fotoğraf daha önce yüklendi",
+                    "duplicate": True,
+                    "existing_filename": sonuc["existing_filename"],
+                },
+                HTTPStatus.CONFLICT,
+            )
+            return
+        self.send_json(sonuc, HTTPStatus.ACCEPTED)
 
-        OCR_QUEUE.put((dest, image_hash))
-        self.send_json(
-            {
-                "ok": True,
-                "filename": filename,
-                "receipt": record,
-                "queue_size": OCR_QUEUE.qsize(),
-            },
-            HTTPStatus.ACCEPTED,
-        )
+    def handle_gelen_ac(self) -> None:
+        """Gelen kutusu klasörünü dosya yöneticisinde açar — sadece sunucunun
+        çalıştığı bilgisayardan (telefondan/ağdan gelen istek reddedilir)."""
+        istemci = str(self.client_address[0])
+        if istemci not in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+            self.send_json(
+                {"error": "Klasör sadece programın çalıştığı bilgisayardan açılabilir"},
+                HTTPStatus.FORBIDDEN,
+            )
+            return
+        try:
+            GELEN_DIR.mkdir(parents=True, exist_ok=True)
+            klasoru_ac(GELEN_DIR)
+            self.send_json({"ok": True, "klasor": str(GELEN_DIR)})
+        except OSError as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def handle_delete(self) -> None:
         """Fişi kalıcı silmez — dosyayı fisler/silinenler/ klasörüne taşır
@@ -734,7 +1137,7 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
 def main() -> None:
     import argparse
 
-    global DATA_FILE, FISLER_DIR
+    global DATA_FILE, FISLER_DIR, GELEN_DIR
 
     parser = argparse.ArgumentParser(description="Fiş OCR kontrol arayüzü")
     parser.add_argument("--port", type=int, default=8765)
@@ -756,11 +1159,19 @@ def main() -> None:
         default=FISLER_DIR,
         help="Yüklenen görsellerin kaydedileceği klasör (varsayılan: fisler)",
     )
+    parser.add_argument(
+        "--gelen-dir",
+        type=Path,
+        default=GELEN_DIR,
+        help="Toplu ekleme için izlenen gelen kutusu klasörü (varsayılan: gelen_fisler)",
+    )
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
     DATA_FILE = args.data_file.resolve()
     FISLER_DIR = args.fisler_dir.resolve()
+    GELEN_DIR = args.gelen_dir.resolve()
     FISLER_DIR.mkdir(exist_ok=True)
+    GELEN_DIR.mkdir(parents=True, exist_ok=True)
     parti_yonetimi.yollari_ayarla(ROOT, DATA_FILE, FISLER_DIR)
     hash_indeksini_hazirla()
     try:
@@ -789,7 +1200,11 @@ def main() -> None:
                     image_hash = receipt.get("_dosya_hash") or dosya_hashi(image_path)
                     OCR_QUEUE.put((image_path, image_hash))
 
+    # Gelen kutusu, yarım kalan OCR kayıtları kuyruğa girdikten sonra izlenir.
+    threading.Thread(target=gelen_izleyici, name="gelen-izleyici", daemon=True).start()
+
     print(f"Fiş kontrol arayüzü (bu bilgisayardan): {local_address}")
+    print(f"Toplu ekleme için fotoğrafları şu klasöre at: {GELEN_DIR}")
     if args.host != "127.0.0.1":
         print(f"Telefondan fotoğraf çekmek için (aynı WiFi'de): http://{lan_ip()}:{args.port}/cek")
         print("(Telefon ve bilgisayar aynı WiFi ağında olmalı; Windows Güvenlik")

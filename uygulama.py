@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -40,6 +41,7 @@ def yollari_ayarla() -> Path:
     arayuz.UI_DIR = paket_koku() / "ui"
     arayuz.DATA_FILE = root / "sonuclar.json"
     arayuz.FISLER_DIR = root / "fisler"
+    arayuz.GELEN_DIR = root / "gelen_fisler"
 
     excel_aktar.ROOT = root
     excel_aktar.DATA_FILE = arayuz.DATA_FILE
@@ -83,9 +85,66 @@ def json_get(url: str, timeout: float = 2.0):
         return json.loads(response.read().decode("utf-8"))
 
 
-def ollama_exe() -> Path:
-    local = Path(os.environ.get("LOCALAPPDATA", ""))
-    return local / "Programs" / "Ollama" / "ollama.exe"
+WINDOWS = sys.platform.startswith("win")
+MACOS = sys.platform == "darwin"
+MAC_OLLAMA_APP = Path("/Applications/Ollama.app")
+
+
+def kurulum_dosyasi() -> str:
+    """Bu işletim sisteminde kullanıcının çalıştırması gereken kurulum dosyası."""
+    if WINDOWS:
+        return "KURULUM.bat"
+    if MACOS:
+        return "KURULUM.command"
+    return "KURULUM.command (veya 'ollama pull qwen2.5vl:7b')"
+
+
+def ollama_exe() -> Path | None:
+    """Ollama komut satırı aracını bulur; yoksa None döner."""
+    bulunan = shutil.which("ollama")
+    if bulunan:
+        return Path(bulunan)
+    adaylar: list[Path] = []
+    if WINDOWS:
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            adaylar.append(Path(local) / "Programs" / "Ollama" / "ollama.exe")
+    else:
+        adaylar += [
+            MAC_OLLAMA_APP / "Contents" / "Resources" / "ollama",
+            Path("/usr/local/bin/ollama"),
+            Path("/opt/homebrew/bin/ollama"),
+        ]
+    for aday in adaylar:
+        if aday.is_file():
+            return aday
+    return None
+
+
+def _ollama_baslat() -> bool:
+    """Ollama sunucusunu arka planda başlatır. Başlatma denendiyse True."""
+    exe = ollama_exe()
+    if exe is not None:
+        ayarlar: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        if WINDOWS:
+            ayarlar["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        else:
+            ayarlar["start_new_session"] = True
+        try:
+            subprocess.Popen([str(exe), "serve"], **ayarlar)
+            return True
+        except OSError:
+            pass
+    if MACOS and MAC_OLLAMA_APP.is_dir():
+        try:
+            subprocess.Popen(
+                ["open", "-g", "-a", "Ollama"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            return True
+        except OSError:
+            pass
+    return False
 
 
 def ollamayi_hazirla() -> tuple[bool, str]:
@@ -94,15 +153,11 @@ def ollamayi_hazirla() -> tuple[bool, str]:
     try:
         tags = json_get(tags_url)
     except Exception:
-        exe = ollama_exe()
-        if not exe.is_file():
-            return False, "Ollama kurulu değil. Önce KURULUM.bat dosyasını çalıştırın."
-        bayrak = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        subprocess.Popen(
-            [str(exe), "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            creationflags=bayrak,
-        )
-        for _ in range(30):
+        if not _ollama_baslat():
+            return False, (
+                f"Ollama kurulu değil. Önce {kurulum_dosyasi()} dosyasını çalıştırın."
+            )
+        for _ in range(40):
             time.sleep(0.5)
             try:
                 tags = json_get(tags_url)
@@ -116,7 +171,7 @@ def ollamayi_hazirla() -> tuple[bool, str]:
     if extract_json.MODEL not in modeller:
         return False, (
             f"Gerekli OCR modeli ({extract_json.MODEL}) kurulu değil. "
-            "Önce KURULUM.bat dosyasını çalıştırın."
+            f"Önce {kurulum_dosyasi()} dosyasını çalıştırın."
         )
     return True, "OCR hazır"
 
