@@ -6,12 +6,13 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[('ui', 'ui')],
-    hiddenimports=["otomatik_duzeltme"],
+    hiddenimports=["otomatik_duzeltme", "alan_yeniden_okuma", "cv2", "numpy"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    # Calisma zamaninda kullanilmayan agir paketler (yalniz deney betikleri kullanir)
-    excludes=['numpy', 'cv2', 'tkinter', 'transformers', 'torch'],
+    # Calisma zamaninda kullanilmayan agir paketler (yalniz deney betikleri kullanir).
+    # numpy/cv2 artik gerekli: alan_yeniden_okuma tablo kutularini OpenCV ile bulur.
+    excludes=['tkinter', 'transformers', 'torch'],
     noarchive=False,
     optimize=0,
 )

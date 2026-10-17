@@ -5,11 +5,6 @@
 # EXE paketleme (EXE_OLUSTUR.bat)
 pyinstaller>=6.0
 
-# Goruntu on-isleme / benchmark deneyleri:
-#   goruntu_hazirla.py, hucre_mozaik.py, hucre_llm_benchmark.py, crop_lines.py
-numpy>=1.26
-opencv-python-headless>=4.8
-
 # TrOCR denemesi (test_trocr.py) - buyuk indirme, gerekirse elle acin:
 # transformers
 # torch

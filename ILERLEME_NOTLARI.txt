@@ -510,3 +510,39 @@ DÜZELTME KATMANI (otomatik_duzeltme.py, excel_ogrenme.guvenli_otomatik_duzelt):
   düzeltmesiz %35 → eski düzeltme %48 → yeni düzeltme %78 tam doğru fiş;
   alan doğruluğu %85,7 → %90,0 → %96,4. Düzelen 79 alan, bozulan 4.
 - Kalan hataların çoğu ekipman fişleri ve tutarsız etiketler (GUZ/GVZ).
+
+
+8) 18 EKİM 2026 — ŞÜPHELİ ALAN YENİDEN OKUMA (UYGULAMAYA BAĞLANDI)
+-------------------------------------------------------------------
+NE: Otomatik düzeltmeden sonra firma/plaka/ad_soyad geçmişte (Excel + onaylı
+fişler) aynen yoksa o alanın satırı fişten kırpılıp Qwen'e alan adıyla
+("Bu alan 'Araç Plakası' alanıdır") yeniden okutuluyor. Yeni okuma aynı
+düzeltmeden geçip geçmişte bilinen bir değere oturursa kabul, yoksa ilk sonuç
+kalır. Ekipman fişinde ad_soyad okunmaz (esle() ad + K.M. hücresini birleştirir).
+Kod: alan_yeniden_okuma.py, arayuz.ocr_worker, excel_ogrenme.gecmiste_var.
+Kapatmak: MAZOT_YENIDEN_OKUMA=0. Denenen her alan kayda _yeniden_okuma olarak,
+kabul edilenler _otomatik_duzeltmeler'e yazılır. Hata (Ollama 500, cv2 yok)
+OCR akışını bozmaz.
+
+KIRPMA: Tablo kutuları türevle (Sobel) bulunuyor: yatay/dikey çizgiler →
+etiket|değer ayracı → onu kesen satır çizgilerine fitLine (eğik fotoğrafa
+dayanıklı). 100/100 test fişinde tablo bulundu, ~0,15 sn. Eski
+hucre_mozaik.satir_cizgilerini_bul sahte çizgi verdiği için kazanç sıfırdı.
+
+ÖLÇÜM (sızıntısız; ayar yalnız 693 test dışı fişte seçildi):
+- Uygulama yolu (guvenli_otomatik_duzelt), 100 fiş: tam doğru %77 → %81,
+  fiş başı 5,9 → 6,1 sn (yalnız şüpheli fişler ikinci çağrı alıyor).
+- Aynı yol, 693 test dışı fiş: %68,5 → %72,3.
+- Deney sürümü (duzeltme_benchmark 'yeni'): %80 → %82 (100 fiş).
+- Kırpma kenarı 1000/1280/1600 neredeyse aynı; 1600 seçildi.
+
+BAĞIMLILIK: numpy + opencv-python-headless artık requirements.txt'de; EXE
+spec'te cv2/numpy hariç tutulmuyor (EXE büyür). EXE_OLUSTUR.bat ile yeniden
+oluşturulmalı.
+
+AÇIK:
+- Ekipman fişlerinde hücre takası düzeltmelerinden öğrenilmiş kullanıcı
+  kuralları plaka alanını bozuyor (ekipman adı → kişi adı, ör. JCB/JENERATÖR);
+  3 test fişi. Ayrı iş.
+- Windows'ta model kısmen CPU'ya taşarsa (masaüstü uygulamaları VRAM tutarken)
+  çağrı ~1,5 sn yerine ~23 sn sürüyor.

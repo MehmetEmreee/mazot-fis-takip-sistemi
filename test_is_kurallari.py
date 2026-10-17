@@ -457,6 +457,112 @@ class BenzerlikDuzeltmesiTesti(unittest.TestCase):
         self.assertEqual(self.duzelt(ad_soyad="KEMAL YILDIZ")["ad_soyad"], "KEMAL YILDIZ")
 
 
+class YenidenOkumaTesti(unittest.TestCase):
+    """alan_yeniden_okuma: şüpheli alanı kırpıp yeniden okuma ve kabul kuralı."""
+
+    setUp = BenzerlikDuzeltmesiTesti.setUp
+    tearDown = BenzerlikDuzeltmesiTesti.tearDown
+
+    @staticmethod
+    def sentetik_fis(yol: Path, aci: float = 3.0, satir: int = 130) -> None:
+        """Masada, hafif eğik duran 5 satırlı etiket|değer tablolu fiş."""
+        from PIL import Image, ImageDraw
+
+        img = Image.new("RGB", (1200, 1700), "white")
+        d = ImageDraw.Draw(img)
+        ust, sol, sag, ayrac = 600, 150, 1050, 500
+        for i in range(6):
+            d.line((sol, ust + i * satir, sag, ust + i * satir), fill="black", width=4)
+        for x in (sol, ayrac, sag):
+            d.line((x, ust, x, ust + 5 * satir), fill="black", width=4)
+        for i in range(5):  # el yazısını andıran kısa çizgiler
+            y = ust + i * satir + satir // 2
+            d.line((ayrac + 60, y, ayrac + 200, y - 25), fill="navy", width=6)
+            d.text((sol + 30, y - 10), "Etiket", fill="black")
+        masa = Image.new("RGB", (1500, 2000), (60, 40, 30))
+        masa.paste(img.rotate(aci, expand=True, fillcolor=(60, 40, 30)), (40, 40))
+        masa.save(yol, quality=90)
+
+    def kayit_ve_ham(self, **alanlar):
+        ham = {"firma": "-", "plaka": "-", "ad_soyad": "-", **alanlar}
+        kayit = dict(ham)
+        excel_ogrenme.guvenli_otomatik_duzelt(kayit)
+        return kayit, ham
+
+    def test_egik_fotografta_tablo_satirlari_bulunur(self):
+        import alan_yeniden_okuma as yo
+        from PIL import Image
+
+        yol = Path(self.gecici.name) / "fis.jpg"
+        self.sentetik_fis(yol)
+        img = Image.open(yol)
+        tablo = yo.tablo_bul(img)
+        self.assertIsNotNone(tablo)
+        self.assertEqual(len(tablo["satirlar"]), 6)
+        self.assertAlmostEqual(tablo["r"], 130, delta=10)
+        parca = yo.alan_kirp(img, "plaka", tablo)
+        self.assertGreater(parca.height, 130)
+        self.assertLess(parca.height, 2.2 * 130)
+
+    def test_gecmise_oturan_yeni_okuma_kabul_edilir(self):
+        import alan_yeniden_okuma as yo
+
+        yol = Path(self.gecici.name) / "fis.jpg"
+        self.sentetik_fis(yol)
+        kayit, ham = self.kayit_ve_ham(plaka="34 QWX 1")
+        okunan = []
+        kabul = yo.yeniden_oku_ve_duzelt(
+            kayit, ham, yol, okuyucu=lambda parca, alan: okunan.append(alan) or "K08 659")
+        self.assertEqual(okunan, ["plaka"])
+        self.assertEqual(kayit["plaka"], "34 KDB 659")
+        self.assertEqual(len(kabul), 1)
+        self.assertTrue(kayit["_yeniden_okuma"][0]["kabul"])
+        self.assertIn("yeniden okundu", kayit["_otomatik_duzeltmeler"][-1]["neden"])
+
+    def test_gecmise_oturmayan_okuma_ilk_sonucu_korur(self):
+        import alan_yeniden_okuma as yo
+
+        yol = Path(self.gecici.name) / "fis.jpg"
+        self.sentetik_fis(yol)
+        kayit, ham = self.kayit_ve_ham(plaka="34 QWX 1")
+        yo.yeniden_oku_ve_duzelt(kayit, ham, yol, okuyucu=lambda p, a: "99 ZZZ 000")
+        self.assertEqual(kayit["plaka"], "34 QWX 1")
+        self.assertFalse(kayit["_yeniden_okuma"][0]["kabul"])
+
+    def test_gecmiste_olan_alan_yeniden_okunmaz(self):
+        import alan_yeniden_okuma as yo
+
+        kayit, ham = self.kayit_ve_ham(plaka="34 KDB 659", ad_soyad="ORHAN")
+        cagri = []
+        yo.yeniden_oku_ve_duzelt(kayit, ham, Path("yok.jpg"),
+                                 okuyucu=lambda p, a: cagri.append(a))
+        self.assertEqual(cagri, [])
+        self.assertNotIn("_yeniden_okuma", kayit)
+
+    def test_okuma_hatasi_ocr_akisini_bozmaz(self):
+        import alan_yeniden_okuma as yo
+
+        yol = Path(self.gecici.name) / "fis.jpg"
+        self.sentetik_fis(yol)
+        kayit, ham = self.kayit_ve_ham(plaka="34 QWX 1")
+
+        def bozuk(parca, alan):
+            raise ConnectionError("ollama kapalı")
+
+        self.assertEqual(yo.yeniden_oku_ve_duzelt(kayit, ham, yol, okuyucu=bozuk), [])
+        self.assertEqual(kayit["plaka"], "34 QWX 1")
+        self.assertIn("ollama kapalı", kayit["_yeniden_okuma"][0]["hata"])
+
+    def test_ekipman_fisinde_ad_soyad_yeniden_okunmaz(self):
+        import alan_yeniden_okuma as yo
+
+        kayit = {"firma": "-", "plaka": "KAZIK MAK", "ad_soyad": "HASAN - VELİ",
+                 "_ekipman_durumu": True}
+        self.assertEqual(
+            yo.supheli_alanlar(kayit, lambda a, d: a == "plaka", excel_ogrenme._anlamli), []
+        )
+
+
 @unittest.skipUnless(KAYNAK_EXCEL.exists(), "Gerçek Excel örneği bu bilgisayarda yok")
 class BirikimliExcelOgrenmesiTesti(unittest.TestCase):
     def test_farkli_sayfalar_birikir_ayni_sayfa_guncellenir(self):

@@ -659,6 +659,20 @@ def guvenli_otomatik_duzelt(kayit: dict) -> int:
     return len(degisiklikler)
 
 
+def gecmiste_var(alan: str, deger) -> bool:
+    """Değer (yazım farkları hariç) Excel geçmişinde veya onaylı fişlerde aynen var mı?
+
+    Referans yoksa True döner: karşılaştıracak geçmiş yokken şüphe üretilmez.
+    """
+    import otomatik_duzeltme
+
+    referans = birlesik_referans_yukle()
+    if not referans:
+        return True
+    sozluk = _otomatik_sozluk(referans)
+    return otomatik_duzeltme._sade(deger) in sozluk.degerler.get(alan, {})
+
+
 def durum() -> dict:
     referans = birlesik_referans_yukle()
     if not referans:

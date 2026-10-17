@@ -8,6 +8,7 @@ Arayüz varsayılan olarak http://127.0.0.1:8765 adresinde açılır.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import io
 import json
@@ -35,6 +36,7 @@ from dogrulama import kaydi_dogrula  # noqa: E402
 from normalizasyon import fis_normalize_et  # noqa: E402
 import excel_aktar  # noqa: E402
 import excel_ogrenme  # noqa: E402
+import alan_yeniden_okuma  # noqa: E402
 import parti_yonetimi  # noqa: E402
 
 try:  # iPhone HEIC fotoğraflarını Pillow ile açabilmek için (pillow-heif)
@@ -403,7 +405,10 @@ def ocr_worker() -> None:
                 })
 
             if not record.get("HATA"):
+                ham_kayit = copy.deepcopy(record)
                 excel_ogrenme.guvenli_otomatik_duzelt(record)
+                # Geçmişte karşılığı olmayan alanı kırpıp alan adıyla yeniden okut.
+                alan_yeniden_okuma.yeniden_oku_ve_duzelt(record, ham_kayit, image_path)
                 kaydi_dogrula(fis_normalize_et(record))
 
             # OCR başarılıysa fiş no ile adlandırma kuralını koru (hâlâ temp/'te).

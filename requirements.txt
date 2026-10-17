@@ -9,3 +9,5 @@ requests>=2.31
 rapidfuzz>=3.0
 openpyxl>=3.1
 pillow-heif>=0.18  # iPhone HEIC fotoğrafları
+numpy>=1.26
+opencv-python-headless>=4.8  # şüpheli alan yeniden okumada tablo kutuları
