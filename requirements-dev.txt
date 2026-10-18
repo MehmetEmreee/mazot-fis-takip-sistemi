@@ -2,7 +2,7 @@
 # Uygulamanin kendisi bunlara ihtiyac duymaz.
 -r requirements.txt
 
-# EXE paketleme (EXE_OLUSTUR.bat)
+# EXE paketleme (scripts/windows/EXE_OLUSTUR.bat)
 pyinstaller>=6.0
 
 # TrOCR denemesi (test_trocr.py) - buyuk indirme, gerekirse elle acin:

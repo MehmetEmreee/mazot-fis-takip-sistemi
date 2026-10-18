@@ -3,8 +3,11 @@
 __pycache__/
 *.pyc
 
-# Kişisel veri içeren fiş fotoğrafları ve bunlardan üretilen çıktılar
-# (isim, plaka, firma gibi bilgiler içeriyor — GitHub'a gitmemeli)
+# Uygulama verisi: fişler, kayıtlar, arşiv, yedekler, öğrenme dosyaları
+# (isim, plaka, firma içerir — GitHub'a gitmemeli). Bkz. mazot/yollar.py
+/data/
+
+# Eski kurulumlarda kökte duran veri (ilk açılışta data/ altına taşınır)
 fisler/
 sonuclar.json
 arsiv/
@@ -42,9 +45,16 @@ benchmark_*.json
 # Telefondan/klasorden gelen, henuz islenmemis fisler (kisisel veri)
 gelen_fisler/
 
-# PyInstaller ara ciktilari (EXE_OLUSTUR.bat yeniden uretir)
+# PyInstaller çıktıları ve EXE (scripts/windows/EXE_OLUSTUR.bat yeniden üretir;
+# dağıtım için GitHub Releases kullanılır)
 build/
 dist/
+/*.exe
+
+# Araç önbellekleri
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
 
 # macOS
 .DS_Store

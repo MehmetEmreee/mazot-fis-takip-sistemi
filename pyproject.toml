@@ -1,0 +1,31 @@
+[project]
+name = "mazot-fis-kontrol"
+version = "1.0.0"
+description = "Yerel OCR ile akaryakıt fişi okuma, kullanıcı kontrollü doğrulama ve Excel aktarımı"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Mehmet Emre Çelebi" }]
+requires-python = ">=3.10"
+# Çalışma bağımlılıklarının tek kaynağı requirements.txt (başlatıcılar onu kurar).
+dynamic = ["dependencies"]
+
+[project.scripts]
+mazot-fis-kontrol = "mazot.uygulama:main"
+
+[tool.setuptools]
+packages = ["mazot"]
+
+[tool.setuptools.package-data]
+mazot = ["ui/*"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+extend-exclude = ["experiments"]

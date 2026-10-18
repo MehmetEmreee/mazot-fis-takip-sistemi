@@ -108,10 +108,10 @@ cd mazot-fis-takip-sistemi
 
 | Sistem | İlk kurulum | Sonraki açılışlar |
 | --- | --- | --- |
-| Windows | Ollama'yı kurun, ardından `KURULUM.bat` çalıştırın. | `BASLAT_ARAYUZ.bat` |
-| macOS | Ollama'yı kurun, ardından `KURULUM.command` çalıştırın. | `BASLAT.command` |
+| Windows | Ollama'yı kurun, ardından `scripts\windows\KURULUM.bat` çalıştırın. | `scripts\windows\BASLAT_ARAYUZ.bat` |
+| macOS | Ollama'yı kurun, ardından `scripts/macos/KURULUM.command` çalıştırın. | `scripts/macos/BASLAT.command` |
 
-Kurulum betikleri varsayılan modeli indirir ve Python ortamını hazırlar. macOS'ta dosyalar çift tıklamayla çalışmıyorsa terminalden `bash KURULUM.command` ve `bash BASLAT.command` kullanılabilir.
+Kurulum betikleri varsayılan modeli indirir ve Python ortamını hazırlar. macOS'ta dosyalar çift tıklamayla çalışmıyorsa terminalden `bash scripts/macos/KURULUM.command` ve `bash scripts/macos/BASLAT.command` kullanılabilir. Başlatıcılar nereden açılırsa açılsın depo kökünde çalışır.
 
 ### 3. Kaynaktan manuel kurulum
 
@@ -126,7 +126,7 @@ ollama pull qwen2.5vl:7b
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe uygulama.py
+.\.venv\Scripts\python.exe -m mazot
 ```
 
 **macOS:**
@@ -134,7 +134,7 @@ py -3.12 -m venv .venv
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python uygulama.py
+.venv/bin/python -m mazot
 ```
 
 Tarayıcı `http://127.0.0.1:8765` adresinde açılır. Başlatıcı terminalinin kapanması uygulamayı durdurur.
@@ -147,14 +147,14 @@ Ollama hizmetini ayrıca açtıktan sonra:
 
 ```bash
 # macOS; Windows'ta Python yolu: .\.venv\Scripts\python.exe
-.venv/bin/python arayuz.py --host 127.0.0.1 --port 8765
+.venv/bin/python -m mazot.arayuz --host 127.0.0.1 --port 8765
 ```
 
-Bu komut başlatıcının günlük yedekleme ve Ollama hazırlama adımlarını çalıştırmaz. Yedeklerinizi ayrıca yönetin.
+Bu komut başlatıcının günlük yedekleme, eski veriyi `data/` klasörüne taşıma ve Ollama hazırlama adımlarını çalıştırmaz. Yedeklerinizi ayrıca yönetin.
 
 ### Windows EXE
 
-Başlatma betiği `.venv\Scripts\python.exe` varsa kaynak kodu, yoksa mevcut EXE'yi kullanır. Depodaki EXE'nin güncel kaynakla aynı sürüm olduğunu varsaymayın. Yeniden paketlemek için Windows'ta `EXE_OLUSTUR.bat` çalıştırın; işlem PyInstaller kullanır ve mevcut dağıtım dosyasını günceller.
+Başlatma betiği `.venv\Scripts\python.exe` varsa kaynak kodu, yoksa depo kökündeki `Mazot Fis Kontrol.exe` dosyasını kullanır. EXE depoda tutulmaz; Windows'ta `scripts\windows\EXE_OLUSTUR.bat` ile `packaging/mazot_fis_kontrol.spec` üzerinden PyInstaller ile oluşturulur ve depo köküne kopyalanır. Hazır EXE'yi dağıtmak için GitHub Releases kullanın.
 
 <a id="tr-usage"></a>
 
@@ -203,11 +203,13 @@ G ve I–M sütunlarına aktarım yapılmaz. Varsayılan başlangıç, son işle
 
 ## Veri, yedekleme ve güvenlik
 
-| Konum | İçerik |
+Bütün değişen veriler depo kökündeki `data/` klasöründedir (`MAZOT_VERI_DIZINI` ile değiştirilebilir). Eski sürümlerde bu dosyalar doğrudan kökteydi; uygulama ilk açılışta onları bir kez `data/` altına taşır ve `data/tasima_kaydi.json` dosyasına yazar. Bir öğe taşınamazsa (ör. dosya açık) hiçbir şey taşınmaz ve uygulama nedenini söyleyerek kapanır.
+
+| Konum (`data/` altında) | İçerik |
 | --- | --- |
 | `sonuclar.json` | Aktif fiş kayıtları ve işlem durumu |
 | `fisler/` | Geçici, firma bazında düzenlenmiş ve silinen görseller |
-| `gelen_fisler/` | İzlenen giriş klasörü ve kaynak görseller |
+| `gelen_fisler/` | İzlenen giriş klasörü ve kaynak görseller (eski kökteki `gelen_fisler/` de varsa taranır) |
 | `excel_referans.json` | Excel'den öğrenilen referanslar |
 | `kullanici_ogrenmeleri.json` | Kullanıcı düzeltmeleri ve eşleştirmeler |
 | `aktif_parti.json` | Aktif parti bilgisi |
@@ -215,7 +217,7 @@ G ve I–M sütunlarına aktarım yapılmaz. Varsayılan başlangıç, son işle
 | `output/` | Yüklenen Excel dosyaları ve son aktarım ayarları |
 | `yedekler/` | Otomatik JSON ve Excel yedekleri |
 
-`uygulama.py`, açılışta belirli JSON/ayar dosyalarını günde bir kez yedekler. Excel aktarımı hedef dosya için günde bir kez yazma öncesi kopya oluşturur. Bu yedekler her işlemin sürümünü veya bütün görselleri kapsamaz. Tam yedek için uygulamayı durdurun; yukarıdaki veri konumlarıyla birlikte proje dışında kullanılan hedef Excel dosyalarını da ayrı bir depolamaya kopyalayın. Düzenli geri yükleme denemesi yapın.
+`mazot/uygulama.py`, açılışta belirli JSON/ayar dosyalarını günde bir kez yedekler. Excel aktarımı hedef dosya için günde bir kez yazma öncesi kopya oluşturur. Bu yedekler her işlemin sürümünü veya bütün görselleri kapsamaz. Tam yedek için uygulamayı durdurun; yukarıdaki veri konumlarıyla birlikte proje dışında kullanılan hedef Excel dosyalarını da ayrı bir depolamaya kopyalayın. Düzenli geri yükleme denemesi yapın.
 
 Fişler isim, plaka ve firma bilgisi içerebilir. `.gitignore` birçok çalışma verisini dışlar; bu, şifreleme veya erişim kontrolü sağlamaz. Uygulamada kullanıcı hesabı, rol tabanlı yetkilendirme ve yerleşik HTTPS bulunmaz. İnternete açmayın, port yönlendirme yapmayın; erişimi güvenilir cihazlarla sınırlayın. Uygulama Türkçe fiş şablonuna ve belirli iş kurallarına göre tasarlanmıştır.
 
@@ -223,16 +225,30 @@ Fişler isim, plaka ve firma bilgisi içerebilir. `.gitignore` birçok çalışm
 
 ## Mimari
 
-| Bileşen | Sorumluluk |
+```text
+mazot/                 Uygulama paketi (python -m mazot)
+  ui/                  HTML, CSS ve JavaScript kontrol arayüzü
+tests/                 Birim testleri (Ollama gerektirmez)
+tools/                 Ölçüm ve bakım araçları (python -m tools.<ad>)
+experiments/           Kullanılmayan yaklaşımların deney betikleri
+scripts/windows/       KURULUM, BASLAT_ARAYUZ, EXE_OLUSTUR, YENIDEN_BASLAT
+scripts/macos/         KURULUM, BASLAT, YENIDEN_BASLAT (.command)
+packaging/             PyInstaller tanımı (Windows EXE)
+docs/                  Kullanım kılavuzu ve geliştirme notları
+data/                  Çalışma verisi (git dışında, ilk açılışta oluşur)
+```
+
+| Modül (`mazot/`) | Sorumluluk |
 | --- | --- |
-| `uygulama.py` | Başlatma, yollar, günlük veri yedeği ve Ollama kontrolü |
+| `uygulama.py` | Başlatma, günlük veri yedeği ve Ollama kontrolü |
+| `yollar.py` | Kod, arayüz ve veri yolları; eski kök verisini `data/` altına taşıma |
 | `arayuz.py` | HTTP API, yüklemeler, klasör izleme, kayıt yönetimi ve OCR işçisi |
 | `extract_json.py` | Görsel hazırlama, Ollama çağrısı ve ham alan eşleme |
 | `normalizasyon.py` / `dogrulama.py` | Alan normalizasyonu ve merkezi iş kuralları |
-| `excel_ogrenme.py` | Referanslar, benzerlik önerileri ve öğrenilen düzeltmeler |
+| `excel_ogrenme.py` / `otomatik_duzeltme.py` | Referanslar, benzerlik önerileri ve geçmişe dayalı otomatik düzeltme |
+| `alan_yeniden_okuma.py` | Geçmişte karşılığı olmayan alanı fişten kırpıp alan adıyla yeniden okuma |
 | `excel_aktar.py` | Excel önizleme, yedekleme ve aktarım |
 | `parti_yonetimi.py` | Parti arşivleme ve SHA-256 manifestleri |
-| `ui/` | HTML, CSS ve JavaScript kontrol arayüzü |
 
 Çalışma zamanı: Python standart HTTP sunucusu, Pillow, Requests, RapidFuzz, openpyxl, pillow-heif, NumPy ve OpenCV (şüpheli alanların yeniden okunmasında tablo kutularını bulmak için). Kalıcılık JSON ve dosya sistemi üzerinden sağlanır; ayrı veritabanı yoktur. OCR işleri tek arka plan işçisiyle sırayla çalışır.
 
@@ -252,8 +268,8 @@ Fişler isim, plaka ve firma bilgisi içerebilir. `.gitignore` birçok çalışm
 Doğrudan sunucu seçenekleri:
 
 ```text
-arayuz.py --host ADRES --port PORT --data-file JSON_YOLU
-          --fisler-dir GORSEL_DIZINI --gelen-dir GELEN_DIZINI --no-browser
+python -m mazot.arayuz --host ADRES --port PORT --data-file JSON_YOLU
+                       --fisler-dir GORSEL_DIZINI --gelen-dir GELEN_DIZINI --no-browser
 ```
 
 Bu seçenekler bütün uygulama verilerini tek başına izole etmez; öğrenme ve bazı çıktı yolları proje köküne bağlı kalır. Tam izolasyon gereken deneylerde ayrı bir proje kopyası kullanın. Alternatif model önce Ollama'ya kurulmalıdır; kurulum betikleri `QWEN_MODEL` değerinden bağımsız olarak varsayılan modeli indirir.
@@ -265,20 +281,20 @@ Bu seçenekler bütün uygulama verilerini tek başına izole etmez; öğrenme v
 Temel testleri kurulu sanal ortamın Python'u ile çalıştırın:
 
 ```bash
-python -m unittest -v test_is_kurallari test_toplu_yukleme
+python -m unittest discover -s tests -t . -v
 ```
 
-Normalizasyon, doğrulama, öğrenme, temel arşivleme ve toplu yükleme kontrolleri Ollama olmadan çalışabilir. Bazı Excel testleri kişisel örnek dosya yoksa atlanır. `test_qwen_vl.py` ve `test_trocr.py`, temel otomatik paketten ayrı OCR deney araçlarıdır; TrOCR ek bağımlılıklar ve model indirmesi gerektirir.
+Aynı testler her gönderimde GitHub Actions ile Windows, macOS ve Linux'ta çalışır (`.github/workflows/testler.yml`). Normalizasyon, doğrulama, öğrenme, temel arşivleme ve toplu yükleme kontrolleri Ollama olmadan çalışabilir. Bazı Excel testleri kişisel örnek dosya yoksa atlanır. `experiments/` altındaki `test_qwen_vl.py` ve `test_trocr.py`, temel otomatik paketten ayrı OCR deney araçlarıdır; TrOCR ek bağımlılıklar ve model indirmesi gerektirir.
 
 Etiketlenmiş fiş kopyalarıyla OCR karşılaştırması:
 
 ```bash
-python ocr_benchmark.py --model qwen2.5vl:7b --max-kenar 1600 \
+python -m tools.ocr_benchmark --model qwen2.5vl:7b --max-kenar 1600 \
   --ornek 20 --data-file /path/to/sonuclar.json \
   --images-dir /path/to/fisler --output /path/to/benchmark_sonucu.json
 ```
 
-Windows'ta komutu tek satırda ve uygun dosya yollarıyla kullanın. Araç onaylı ve ham OCR alanları bulunan kayıtları örnekler; üretimdeki otomatik öğrenme düzeltmesini bütünüyle ölçmez. Model, donanım, görsel kümesi ve soğuk/sıcak çalışma koşullarını sonuçlarla birlikte kaydedin. Eksik görseller nedeniyle ölçülen örnek sayısı istenenden az olabilir. Sonuç dosyaları kişisel veri içerebilir.
+Diğer ölçüm ve bakım araçları `tools/README.md` içinde listelenir. Windows'ta komutu tek satırda ve uygun dosya yollarıyla kullanın. Araç onaylı ve ham OCR alanları bulunan kayıtları örnekler; üretimdeki otomatik öğrenme düzeltmesini bütünüyle ölçmez. Model, donanım, görsel kümesi ve soğuk/sıcak çalışma koşullarını sonuçlarla birlikte kaydedin. Eksik görseller nedeniyle ölçülen örnek sayısı istenenden az olabilir. Sonuç dosyaları kişisel veri içerebilir.
 
 <a id="tr-limitations"></a>
 
@@ -313,7 +329,7 @@ Aşağıdaki durumlar kaynak incelemesinde belirlenmiştir; uygulamayı kritik k
 
 Hata bildiriminde işletim sistemi, Python/Ollama sürümleri, model adı, commit, yeniden üretme adımları ve kişisel verilerden arındırılmış hata çıktısını paylaşın. Gerçek fiş veya muhasebe defteri yüklemeyin. Düzeltmeler için regresyon testi; performans değişiklikleri için aynı koşullarda önce/sonra ölçümü ekleyin.
 
-[Hata bildirimi](https://github.com/MehmetEmreee/mazot-fis-takip-sistemi/issues) · [Kısa kullanım kılavuzu](https://github.com/MehmetEmreee/mazot-fis-takip-sistemi/blob/main/KULLANIM.md)
+[Hata bildirimi](https://github.com/MehmetEmreee/mazot-fis-takip-sistemi/issues) · [Kısa kullanım kılavuzu](https://github.com/MehmetEmreee/mazot-fis-takip-sistemi/blob/main/docs/KULLANIM.md)
 
 [MIT Lisansı](https://github.com/MehmetEmreee/mazot-fis-takip-sistemi/blob/main/LICENSE) · © 2026 Mehmet Emre Çelebi. Üçüncü taraf yazılım ve model lisansları ayrıca geçerlidir.
 
@@ -410,10 +426,10 @@ cd mazot-fis-takip-sistemi
 
 | Platform | Initial setup | Subsequent launches |
 | --- | --- | --- |
-| Windows | Install Ollama, then run `KURULUM.bat`. | `BASLAT_ARAYUZ.bat` |
-| macOS | Install Ollama, then run `KURULUM.command`. | `BASLAT.command` |
+| Windows | Install Ollama, then run `scripts\windows\KURULUM.bat`. | `scripts\windows\BASLAT_ARAYUZ.bat` |
+| macOS | Install Ollama, then run `scripts/macos/KURULUM.command`. | `scripts/macos/BASLAT.command` |
 
-The setup scripts download the default model and prepare the Python environment. If double-clicking the macOS scripts does not work, run `bash KURULUM.command` and `bash BASLAT.command` from a terminal.
+The setup scripts download the default model and prepare the Python environment. If double-clicking the macOS scripts does not work, run `bash scripts/macos/KURULUM.command` and `bash scripts/macos/BASLAT.command` from a terminal. The launchers always run from the repository root, wherever they are opened from.
 
 ### 3. Manual setup from source
 
@@ -428,7 +444,7 @@ ollama pull qwen2.5vl:7b
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe uygulama.py
+.\.venv\Scripts\python.exe -m mazot
 ```
 
 **macOS:**
@@ -436,7 +452,7 @@ py -3.12 -m venv .venv
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python uygulama.py
+.venv/bin/python -m mazot
 ```
 
 The browser opens at `http://127.0.0.1:8765`. Closing the launcher terminal stops the application.
@@ -449,14 +465,14 @@ Start Ollama separately, then run:
 
 ```bash
 # macOS; on Windows, use .\.venv\Scripts\python.exe instead
-.venv/bin/python arayuz.py --host 127.0.0.1 --port 8765
+.venv/bin/python -m mazot.arayuz --host 127.0.0.1 --port 8765
 ```
 
-This command bypasses the launcher's daily backup and Ollama preparation steps. Manage backups separately.
+This command bypasses the launcher's daily backup, legacy data migration to `data/`, and Ollama preparation steps. Manage backups separately.
 
 ### Windows executable
 
-The startup script runs source code when `.venv\Scripts\python.exe` exists; otherwise, it uses the available EXE. Do not assume the committed EXE matches the latest source. To rebuild on Windows, run `EXE_OLUSTUR.bat`; this uses PyInstaller and replaces the existing distribution executable.
+The startup script runs source code when `.venv\Scripts\python.exe` exists; otherwise, it uses `Mazot Fis Kontrol.exe` in the repository root. The executable is not stored in the repository: on Windows, `scripts\windows\EXE_OLUSTUR.bat` builds it with PyInstaller from `packaging/mazot_fis_kontrol.spec` and copies it to the repository root. Use GitHub Releases to distribute a prebuilt executable.
 
 <a id="en-usage"></a>
 
@@ -505,11 +521,13 @@ The exporter does not write columns G or I–M. The default starting row is two 
 
 ## Data, backups, and security
 
-| Location | Contents |
+All mutable data lives in the `data/` directory at the repository root (override with `MAZOT_VERI_DIZINI`). Earlier versions kept these files directly in the root; on first start the application moves them into `data/` once and records the move in `data/tasima_kaydi.json`. If any item cannot be moved (for example, a file is open), nothing is moved and the application exits with the reason.
+
+| Location (under `data/`) | Contents |
 | --- | --- |
 | `sonuclar.json` | Active receipt records and processing state |
 | `fisler/` | Temporary images, company-organized images, and soft-deleted images |
-| `gelen_fisler/` | Watched inbox and original source images |
+| `gelen_fisler/` | Watched inbox and original source images (a legacy root `gelen_fisler/` is also scanned if present) |
 | `excel_referans.json` | References learned from Excel |
 | `kullanici_ogrenmeleri.json` | User corrections and learned mappings |
 | `aktif_parti.json` | Active batch metadata |
@@ -517,7 +535,7 @@ The exporter does not write columns G or I–M. The default starting row is two 
 | `output/` | Uploaded workbooks and last export settings |
 | `yedekler/` | Automatic JSON and Excel backups |
 
-At startup, `uygulama.py` backs up selected JSON/settings files once per day. Excel export creates a pre-write copy of each target workbook once per day. These backups do not capture every transaction version or all images. For a complete backup, stop the application and copy the data locations above, together with any external destination workbooks, to separate storage. Test restoration regularly.
+At startup, `mazot/uygulama.py` backs up selected JSON/settings files once per day. Excel export creates a pre-write copy of each target workbook once per day. These backups do not capture every transaction version or all images. For a complete backup, stop the application and copy the data locations above, together with any external destination workbooks, to separate storage. Test restoration regularly.
 
 Receipts may contain names, vehicle plates, and company information. `.gitignore` excludes many runtime files; it does not provide encryption or access control. The application has no user accounts, role-based authorization, or built-in HTTPS. Do not expose it to the internet or configure port forwarding; limit access to trusted devices. The application is designed around Turkish receipt layouts and specific business rules.
 
@@ -525,16 +543,30 @@ Receipts may contain names, vehicle plates, and company information. `.gitignore
 
 ## Architecture
 
-| Component | Responsibility |
+```text
+mazot/                 Application package (python -m mazot)
+  ui/                  HTML, CSS, and JavaScript review interface
+tests/                 Unit tests (no Ollama required)
+tools/                 Measurement and maintenance tools (python -m tools.<name>)
+experiments/           Experiment scripts for approaches that were not adopted
+scripts/windows/       KURULUM, BASLAT_ARAYUZ, EXE_OLUSTUR, YENIDEN_BASLAT
+scripts/macos/         KURULUM, BASLAT, YENIDEN_BASLAT (.command)
+packaging/             PyInstaller definition (Windows executable)
+docs/                  User guide and development notes
+data/                  Runtime data (not in git; created on first start)
+```
+
+| Module (`mazot/`) | Responsibility |
 | --- | --- |
-| `uygulama.py` | Startup, paths, daily data backup, and Ollama checks |
+| `uygulama.py` | Startup, daily data backup, and Ollama checks |
+| `yollar.py` | Code, UI, and data paths; migration of legacy root data into `data/` |
 | `arayuz.py` | HTTP API, uploads, inbox watcher, record management, and OCR worker |
 | `extract_json.py` | Image preparation, Ollama requests, and raw field mapping |
 | `normalizasyon.py` / `dogrulama.py` | Field normalization and centralized business rules |
-| `excel_ogrenme.py` | References, similarity suggestions, and learned corrections |
+| `excel_ogrenme.py` / `otomatik_duzeltme.py` | References, similarity suggestions, and history-based automatic correction |
+| `alan_yeniden_okuma.py` | Crops fields with no match in history and re-reads them with the field name |
 | `excel_aktar.py` | Excel preview, backup, and export |
 | `parti_yonetimi.py` | Batch archival and SHA-256 manifests |
-| `ui/` | HTML, CSS, and JavaScript review interface |
 
 Runtime technologies include Python's standard HTTP server, Pillow, Requests, RapidFuzz, openpyxl, pillow-heif, NumPy, and OpenCV (used to locate table cells when re-reading suspicious fields). Persistence uses JSON and the file system; there is no separate database. A single background worker processes OCR jobs sequentially.
 
@@ -554,8 +586,8 @@ Runtime technologies include Python's standard HTTP server, Pillow, Requests, Ra
 Direct server options:
 
 ```text
-arayuz.py --host ADDRESS --port PORT --data-file JSON_PATH
-          --fisler-dir IMAGE_DIR --gelen-dir INBOX_DIR --no-browser
+python -m mazot.arayuz --host ADDRESS --port PORT --data-file JSON_PATH
+                       --fisler-dir IMAGE_DIR --gelen-dir INBOX_DIR --no-browser
 ```
 
 These options do not isolate all application data: learning files and some output paths remain tied to the project root. Use a separate project copy for experiments requiring complete isolation. Install an alternative model in Ollama before selecting it. Setup scripts download the default model regardless of `QWEN_MODEL`.
@@ -567,20 +599,20 @@ These options do not isolate all application data: learning files and some outpu
 Run the core suite using the installed virtual environment's Python:
 
 ```bash
-python -m unittest -v test_is_kurallari test_toplu_yukleme
+python -m unittest discover -s tests -t . -v
 ```
 
-Normalization, validation, learning, basic archival, and bulk intake checks can run without Ollama. Some Excel tests are skipped when a personal sample workbook is unavailable. `test_qwen_vl.py` and `test_trocr.py` are separate OCR experiment tools, not part of the core automated suite. TrOCR requires additional dependencies and model downloads.
+The same tests run on Windows, macOS, and Linux through GitHub Actions on every push (`.github/workflows/testler.yml`). Normalization, validation, learning, basic archival, and bulk intake checks can run without Ollama. Some Excel tests are skipped when a personal sample workbook is unavailable. `test_qwen_vl.py` and `test_trocr.py` under `experiments/` are separate OCR experiment tools, not part of the core automated suite. TrOCR requires additional dependencies and model downloads.
 
 Compare OCR using copies of labelled receipts:
 
 ```bash
-python ocr_benchmark.py --model qwen2.5vl:7b --max-kenar 1600 \
+python -m tools.ocr_benchmark --model qwen2.5vl:7b --max-kenar 1600 \
   --ornek 20 --data-file /path/to/sonuclar.json \
   --images-dir /path/to/fisler --output /path/to/benchmark_sonucu.json
 ```
 
-On Windows, use a single command line and appropriate paths. The tool samples approved records with raw OCR fields; it does not fully measure the production learning-based correction stage. Record the model, hardware, image set, and cold/warm conditions alongside results. Missing images can reduce the measured sample count. Benchmark output may contain personal data.
+Other measurement and maintenance tools are listed in `tools/README.md`. On Windows, use a single command line and appropriate paths. The tool samples approved records with raw OCR fields; it does not fully measure the production learning-based correction stage. Record the model, hardware, image set, and cold/warm conditions alongside results. Missing images can reduce the measured sample count. Benchmark output may contain personal data.
 
 <a id="en-limitations"></a>
 
@@ -615,7 +647,7 @@ The following conditions were identified during source review. Evaluate them bef
 
 When reporting a bug, include the operating system, Python/Ollama versions, model name, commit, reproduction steps, and sanitized error output. Do not upload real receipts or accounting workbooks. Include regression tests for fixes and comparable before/after measurements for performance changes.
 
-[Report an issue](https://github.com/MehmetEmreee/mazot-fis-takip-sistemi/issues) · [Quick user guide — Turkish](https://github.com/MehmetEmreee/mazot-fis-takip-sistemi/blob/main/KULLANIM.md)
+[Report an issue](https://github.com/MehmetEmreee/mazot-fis-takip-sistemi/issues) · [Quick user guide — Turkish](https://github.com/MehmetEmreee/mazot-fis-takip-sistemi/blob/main/docs/KULLANIM.md)
 
 [MIT License](https://github.com/MehmetEmreee/mazot-fis-takip-sistemi/blob/main/LICENSE) · © 2026 Mehmet Emre Çelebi. Third-party software and model licenses apply separately.
 
