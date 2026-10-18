@@ -70,12 +70,12 @@ Akaryakıt fişi fotoğraflarını yapılandırılmış kayıtlara dönüştüre
 ## Çalışma akışı
 
 ```mermaid
-flowchart TD
-    A["Telefon · Toplu seçim · Gelen kutusu"] --> B["Görsel kaydı ve OCR kuyruğu"]
-    B --> C["Ollama · Alan eşleme · Doğrulama"]
-    C --> D["Geçmiş önerileri ve kullanıcı kontrolü"]
-    D --> E["Onay ve manuel Excel aktarımı"]
-    E --> F["Parti arşivi ve bütünlük manifesti"]
+flowchart LR
+    A["Fiş alımı<br/>telefon · toplu · klasör"] --> B["OCR kuyruğu"]
+    B --> C["Ollama OCR<br/>eşleme · doğrulama"]
+    C --> D["Geçmişle düzeltme<br/>kullanıcı kontrolü"]
+    D --> E["Onay ve<br/>Excel aktarımı"]
+    E --> F["Parti arşivi<br/>manifest"]
 ```
 
 Model ilk kurulumda indirilir. Bağımlılıklar ve model hazır olduğunda normal OCR akışı yerelde çalışır; uygulamanın fiş okuma akışı bir bulut OCR hizmeti kullanmaz.
@@ -372,12 +372,12 @@ A locally hosted, browser-based application that converts fuel receipt photograp
 ## Workflow
 
 ```mermaid
-flowchart TD
-    A["Phone · Bulk selection · Watched inbox"] --> B["Image storage and OCR queue"]
-    B --> C["Ollama · Field mapping · Validation"]
-    C --> D["Historical suggestions and human review"]
-    D --> E["Approval and manual Excel export"]
-    E --> F["Batch archive and integrity manifest"]
+flowchart LR
+    A["Receipt intake<br/>phone · bulk · folder"] --> B["OCR queue"]
+    B --> C["Ollama OCR<br/>mapping · validation"]
+    C --> D["History-based correction<br/>human review"]
+    D --> E["Approval and<br/>Excel export"]
+    E --> F["Batch archive<br/>manifest"]
 ```
 
 The model is downloaded during initial setup. Once dependencies and the model are available, the normal OCR workflow runs locally; the application's receipt extraction workflow does not use a cloud OCR service.
