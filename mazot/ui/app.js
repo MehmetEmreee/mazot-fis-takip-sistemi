@@ -14,6 +14,16 @@ const state = {
   dragging: null,
 };
 
+// Oturum düştüyse (401) giriş sayfasına dön.
+const rawFetch = window.fetch.bind(window);
+window.fetch = async (input, init) => {
+  const response = await rawFetch(input, init);
+  if (response.status === 401 && !String(input).startsWith("/api/giris")) {
+    location.href = "/giris";
+  }
+  return response;
+};
+
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const form = $("#receiptForm");
@@ -79,6 +89,7 @@ function filteredReceipts() {
   return state.receipts.filter((receipt) => {
     if (state.filter === "pending" && receipt._onaylandi) return false;
     if (state.filter === "suspicious" && (!receipt._kontrol_gerekli || receipt._isleniyor)) return false;
+    if (state.filter === "error" && !receipt.HATA) return false;
     if (!query) return true;
     return [receipt._dosya, receipt.plaka, receipt.fis_no, receipt.ad_soyad]
       .filter(Boolean)
@@ -97,7 +108,7 @@ function renderAll() {
   $("#approveButton").classList.toggle("hidden", state.readOnly);
   $("#deleteButton").classList.toggle("hidden", state.readOnly);
   $("#exportButton").disabled = false;
-  const captureLink = document.querySelector('a[href="/cek"]');
+  const captureLink = document.querySelector('a[href^="/cek"]');
   if (captureLink) captureLink.classList.toggle("hidden", state.readOnly);
   $("#bulkButton").classList.toggle("hidden", state.readOnly);
 }
@@ -110,6 +121,7 @@ function renderCounts() {
   $("#allCount").textContent = total;
   $("#pendingCount").textContent = total - approved;
   $("#suspiciousCount").textContent = suspicious;
+  $("#errorCount").textContent = state.receipts.filter((r) => r.HATA).length;
   $("#progressText").textContent = `${approved} / ${total} kontrol edildi`;
   $("#progressPercent").textContent = `%${percent}`;
   $("#progressBar").style.width = `${percent}%`;
@@ -127,7 +139,7 @@ function renderList() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `receipt-item ${receipt._dosya === state.selectedFilename ? "active" : ""}`;
-    const statusClass = receipt._onaylandi ? "approved" : receipt._tekrar ? "duplicate" : receipt._isleniyor ? "processing" : receipt._kontrol_gerekli ? "suspicious" : "";
+    const statusClass = receipt.HATA && !receipt._isleniyor ? "error" : receipt._onaylandi ? "approved" : receipt._tekrar ? "duplicate" : receipt._isleniyor ? "processing" : receipt._kontrol_gerekli ? "suspicious" : "";
     button.innerHTML = `
       <span class="item-index">${actualIndex}</span>
       <span class="item-copy">
@@ -182,12 +194,106 @@ function renderReceipt() {
     badge.textContent = "Bekliyor";
   }
 
-  $("#warningBox").classList.toggle("hidden", !receipt._kontrol_gerekli);
-  $("#warningText").textContent = receipt._kontrol_nedeni || "Otomatik kontrol bu kaydı işaretledi.";
+  const failed = Boolean(receipt.HATA) && !receipt._isleniyor;
+  $("#warningBox").classList.toggle("hidden", !receipt._kontrol_gerekli && !failed);
+  $("#warningBox").classList.toggle("error", failed);
+  $("#warningTitle").textContent = failed ? "İşlenemedi" : "Kontrol öneriliyor";
+  $("#warningText").textContent = failed
+    ? `${receipt.HATA}${receipt._deneme_sayisi ? ` (deneme: ${receipt._deneme_sayisi + 1})` : ""}`
+    : receipt._kontrol_nedeni || "Otomatik kontrol bu kaydı işaretledi.";
+  $("#retryButton").classList.toggle("hidden", !failed || state.readOnly);
+  $("#auditMeta").textContent = auditText(receipt);
   $("#durationMeta").textContent = receipt._sure_sn != null ? `OCR süresi: ${receipt._sure_sn} sn` : "";
   $("#changeMeta").textContent = receipt._duzeltildi ? "Elle düzeltildi" : receipt._onaylandi ? "Değişiklik yapılmadı" : "";
   $("#approveButton").innerHTML = receipt._onaylandi ? "<span>✓</span> Onayı güncelle" : "<span>✓</span> Doğru, onayla";
 }
+
+function shortTime(value) {
+  return value ? new Date(value).toLocaleString("tr-TR", { dateStyle: "short", timeStyle: "short" }) : "";
+}
+
+function auditText(receipt) {
+  const parts = [];
+  if (receipt._yukleyen) parts.push(`Yükleyen: ${receipt._yukleyen}`);
+  if (receipt._son_duzenleyen && !receipt._onaylandi) parts.push(`Düzenleyen: ${receipt._son_duzenleyen}`);
+  if (receipt._onaylandi && receipt._onaylayan) parts.push(`Onaylayan: ${receipt._onaylayan} ${shortTime(receipt._onay_zamani)}`);
+  if (receipt._excel_aktarildi) {
+    parts.push(`Excel: ${receipt._excel_aktaran || "?"} ${shortTime(receipt._excel_aktarim_zamani)} · satır ${receipt._excel_satir}`);
+  }
+  return parts.join(" · ");
+}
+
+async function retryCurrent() {
+  const receipt = currentReceipt();
+  if (!receipt) return;
+  const button = $("#retryButton");
+  setBusy(button, true);
+  try {
+    const response = await fetch("/api/retry", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: receipt._dosya }),
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Tekrar deneme başlatılamadı");
+    toast("Fiş yeniden OCR kuyruğuna alındı");
+    await loadReceipts();
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function loadSession() {
+  try {
+    const response = await fetch("/api/oturum", { cache: "no-store" });
+    const data = await response.json();
+    const who = data.kim;
+    if (!who) return;
+    $("#userChip").textContent = `${who.ad} (${who.rol})`;
+    $("#userLine").classList.toggle("hidden", !data.kullanici_modu);
+    $("#brandSub").classList.toggle("hidden", Boolean(data.kullanici_modu));
+    const captureLink = document.querySelector('a[href^="/cek"]');
+    if (captureLink && data.telefon_baglantisi) captureLink.href = data.telefon_baglantisi;
+  } catch (_) { /* oturum bilgisi olmadan da çalışır */ }
+}
+
+async function loadStatus() {
+  try {
+    const response = await fetch("/api/durum", { cache: "no-store" });
+    if (!response.ok) return;
+    const data = await response.json();
+    const messages = [];
+    if (data.ocr_hatali?.length) {
+      messages.push(`${data.ocr_hatali.length} fiş işlenemedi <button type="button" data-action="errors">göster</button>`);
+    }
+    if (data.excel_yarim?.length) {
+      messages.push(`${data.excel_yarim.length} fişin Excel aktarımı yarım kaldı: aynı aktarımı tekrar başlatın, fişler ikinci kez yazılmaz.`);
+    }
+    if (data.gelen_hatali) {
+      messages.push(`Gelen kutusunda aktarılamayan ${data.gelen_hatali} dosya var (${escapeHtml(data.gelen_klasoru)}).`);
+    }
+    if (data.parti_uyarisi) {
+      messages.push(`${escapeHtml(data.parti_uyarisi.mesaj)}: ${data.parti_uyarisi.cakisan.map(escapeHtml).join(", ")}`);
+    }
+    const banner = $("#statusBanner");
+    banner.innerHTML = messages.join("<br>");
+    banner.classList.toggle("hidden", !messages.length);
+  } catch (_) { /* sonraki yoklamada tekrar denenir */ }
+}
+
+$("#statusBanner").addEventListener("click", (event) => {
+  if (event.target.dataset.action !== "errors") return;
+  state.filter = "error";
+  $$(".filter").forEach((button) => button.classList.toggle("active", button.dataset.filter === "error"));
+  renderAll();
+});
+$("#retryButton").addEventListener("click", retryCurrent);
+$("#logoutButton").addEventListener("click", async () => {
+  await fetch("/api/cikis", { method: "POST" });
+  location.href = "/giris";
+});
 
 function renderExcelSuggestions(receipt) {
   const box = $("#excelSuggestions");
@@ -465,6 +571,10 @@ async function confirmExcelExport() {
 
     if (data.aktarilan > 0) {
       toast(`${data.aktarilan} fiş eklendi (satır ${data.ilk_satir}-${data.son_satir})`);
+      $("#excelModal").classList.add("hidden");
+      loadReceipts();
+    } else if (data.tamamlanan > 0) {
+      toast(`Yarım kalan aktarım tamamlandı: ${data.tamamlanan} fiş (Excel'e tekrar yazılmadı)`);
       $("#excelModal").classList.add("hidden");
       loadReceipts();
     } else {
@@ -960,6 +1070,9 @@ $("#imageStage").addEventListener("pointermove", (event) => {
 $("#imageStage").addEventListener("pointerup", () => { state.dragging = null; $("#imageStage").classList.remove("dragging"); });
 
 async function initialize() {
+  loadSession();
+  loadStatus();
+  setInterval(loadStatus, 8000);
   try {
     await loadParties({ keepSelection: false });
     await loadReceipts({ keepSelection: false });

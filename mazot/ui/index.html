@@ -13,7 +13,11 @@
         <div class="brand-mark" aria-hidden="true">F</div>
         <div>
           <h1>Fiş Kontrol</h1>
-          <p>OCR sonuçlarını görselle karşılaştır</p>
+          <p id="brandSub">OCR sonuçlarını görselle karşılaştır</p>
+          <p class="user-line hidden" id="userLine">
+            <span id="userChip" title="Oturum açan kullanıcı"></span> ·
+            <button class="link-button" id="logoutButton" type="button">Çıkış</button>
+          </p>
         </div>
       </div>
       <div class="progress-wrap">
@@ -57,6 +61,7 @@
           <button class="filter active" data-filter="all" type="button">Tümü <b id="allCount">0</b></button>
           <button class="filter" data-filter="pending" type="button">Bekleyen <b id="pendingCount">0</b></button>
           <button class="filter" data-filter="suspicious" type="button">Şüpheli <b id="suspiciousCount">0</b></button>
+          <button class="filter" data-filter="error" type="button">Hatalı <b id="errorCount">0</b></button>
         </div>
         <div class="receipt-list" id="receiptList"></div>
         <div class="data-time" id="dataTime"></div>
@@ -102,7 +107,8 @@
 
             <div class="warning hidden" id="warningBox">
               <span aria-hidden="true">!</span>
-              <div><strong>Kontrol öneriliyor</strong><p id="warningText"></p></div>
+              <div><strong id="warningTitle">Kontrol öneriliyor</strong><p id="warningText"></p></div>
+              <button class="button secondary hidden" id="retryButton" type="button" title="OCR'ı bu fiş için yeniden çalıştır">Tekrar dene</button>
             </div>
 
             <div class="excel-suggestions hidden" id="excelSuggestions">
@@ -128,6 +134,7 @@
                 <span id="durationMeta"></span>
                 <span id="changeMeta"></span>
               </div>
+              <div class="meta-row audit-meta" id="auditMeta"></div>
 
               <div class="actions">
                 <button class="button danger" id="deleteButton" type="button" title="Fişi sil (silinenler/ klasörüne taşınır)">
@@ -291,6 +298,7 @@
       </div>
     </div>
 
+    <div class="status-banner hidden" id="statusBanner" role="alert"></div>
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="/ui/app.js"></script>
   </body>

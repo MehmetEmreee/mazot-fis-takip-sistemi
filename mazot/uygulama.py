@@ -19,6 +19,7 @@ from . import excel_aktar
 from . import excel_ogrenme
 from . import extract_json
 from . import parti_yonetimi
+from . import yedekleme
 from . import yollar
 
 
@@ -203,6 +204,15 @@ def main() -> None:
             print(f"     Yedek hazır: {yedek.name}")
     except OSError as exc:
         print(f"     Uyarı: otomatik yedek alınamadı ({exc})")
+    try:
+        if not yedekleme.anliklari_listele(root):
+            print("     İlk tam yedek alınıyor (fotoğraflar dahil, birkaç dakika sürebilir)...")
+        anlik = yedekleme.gunluk_yedek(root)
+        if anlik:
+            print(f"     Tam yedek {anlik['kimlik']}: {anlik['dosya_sayisi']} dosya, "
+                  f"yeni {anlik['yeni_bayt'] / 1024 / 1024:,.1f} MB")
+    except OSError as exc:
+        print(f"     Uyarı: tam yedek alınamadı ({exc})")
 
     print("2/3  OCR motoru kontrol ediliyor...")
     tamam, mesaj = ollamayi_hazirla()

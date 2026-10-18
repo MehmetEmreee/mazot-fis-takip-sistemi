@@ -48,8 +48,10 @@ kutusu klasörünün yolu ve **Klasörü aç** düğmesi de var.
 
 ### 3. Telefon tarayıcısından: Fiş Çek
 
-Ekrandaki **Fiş Çek** sayfasını telefonda aç (adres program penceresinde
-yazar). Galeriden yüzlerce fotoğraf tek seferde seçilebilir:
+Program penceresinde yazan `…/cek?anahtar=…` bağlantısını telefonda aç
+(bilgisayardaki **Fiş Çek** düğmesi de aynı bağlantıyı açar). Bağlantıdaki
+anahtar telefona yalnız fotoğraf yükleme izni verir; bağlantıyı kimseyle
+paylaşma. Galeriden yüzlerce fotoğraf tek seferde seçilebilir:
 - Fotoğraflar göndermeden önce telefonda küçültülür (OCR kalitesi korunur,
   yükleme ~10 kat hızlanır). Gerekirse **Orijinal kalitede gönder** seç.
 - Kopan yüklemeler kendiliğinden yeniden denenir.
@@ -77,8 +79,31 @@ Excel geçmişi önerileri görünürse hepsini tek seferde doldurmak için
 **Tümünü uygula** düğmesine bas. Hızlı onay ve sonraki fişe geçiş için
 **Ctrl + Enter** kullanılabilir.
 
-Program her açılışta önemli veri dosyalarının günlük yedeğini alır. Excel'e
+Program her açılışta günde bir kez fotoğraflar dahil tam yedek alır. Excel'e
 yazmadan önce de hedef Excel dosyasının otomatik yedeğini oluşturur.
+
+## Hatalar ve tekrar deneme
+
+Okunamayan fişler listede kırmızı görünür ve **Hatalı** filtresinde toplanır;
+fişi açıp **Tekrar dene** ile yeniden OCR'a gönderebilirsin. Üstte çıkan kırmızı
+bant işlenemeyen fişleri, yarım kalan Excel aktarımını ve gelen kutusunda
+aktarılamayan dosyaları gösterir. Yarım kalan Excel aktarımında aynı aktarımı
+yeniden başlatman yeterli: fişler deftere ikinci kez yazılmaz.
+
+## Kullanıcılar
+
+Birden fazla kişi kullanacaksa her biri için kullanıcı aç (program klasöründe):
+`python -m mazot.erisim ekle <ad> kontrol` (yönetici için `yonetici`, yalnız
+fotoğraf yükleyecekler için `yukleme`). Kullanıcı açıldıktan sonra herkes adı ve
+parolasıyla girer; her fişin altında kimin yüklediği, onayladığı ve Excel'e
+aktardığı görünür.
+
+## Yedekten geri dönme
+
+Programı kapat, sonra program klasöründe:
+`python -m mazot.yedekleme listele` ile yedekleri gör,
+`python -m mazot.yedekleme geri-yukle <kimlik>` ile geri dön. Mevcut veri
+silinmez; `data/yedekler/geri_yukleme_oncesi_…` klasörüne taşınır.
 
 ## İlk kurulum
 

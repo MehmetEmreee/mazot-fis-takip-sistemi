@@ -169,7 +169,7 @@ Başlatma betiği `.venv\Scripts\python.exe` varsa kaynak kodu, yoksa depo kök�
 
 ### Telefon ve gelen kutusu
 
-Telefon ve bilgisayar aynı güvenilir yerel ağdayken terminalde gösterilen `http://<bilgisayar-ip>:8765/cek` adresini açın. Gerekirse işletim sistemi güvenlik duvarında yalnız güvenilir yerel ağ erişimini sağlayın.
+Telefon ve bilgisayar aynı güvenilir yerel ağdayken terminalde gösterilen `http://<bilgisayar-ip>:8765/cek?anahtar=…` bağlantısını açın (arayüzdeki **Fiş Çek** düğmesi de bu bağlantıyı taşır). Anahtar telefona yalnız fotoğraf yükleme ve kendi yüklediklerinin sonucunu görme yetkisi verir; `python -m mazot.erisim anahtar-yenile` eski bağlantıyı geçersiz kılar. Gerekirse işletim sistemi güvenlik duvarında yalnız güvenilir yerel ağ erişimini sağlayın.
 
 Çok sayıda görsel için LocalSend, USB veya bir klasör senkronizasyon aracıyla dosyaları `gelen_fisler/` içine bırakabilirsiniz. İzleyici yaklaşık üç saniyede bir tarar; dosyayı iki ardışık taramada değişmeden gördüğünde ve bütünlük kontrolü geçtiğinde kabul eder.
 
@@ -215,11 +215,29 @@ Bütün değişen veriler depo kökündeki `data/` klasöründedir (`MAZOT_VERI_
 | `aktif_parti.json` | Aktif parti bilgisi |
 | `arsiv/` | Kapanan partiler, görseller ve bütünlük manifestleri |
 | `output/` | Yüklenen Excel dosyaları ve son aktarım ayarları |
-| `yedekler/` | Otomatik JSON ve Excel yedekleri |
+| `yedekler/` | Otomatik JSON ve Excel yedekleri; `yedekler/tam/` artımlı tam yedek |
+| `denetim/<yıl-ay>.jsonl` | Kim, ne zaman, neyi yükledi/düzenledi/onayladı/sildi/aktardı |
+| `kullanicilar.json` | Kullanıcılar (PBKDF2 parola özetleri), roller, telefon anahtarı |
 
-`mazot/uygulama.py`, açılışta belirli JSON/ayar dosyalarını günde bir kez yedekler. Excel aktarımı hedef dosya için günde bir kez yazma öncesi kopya oluşturur. Bu yedekler her işlemin sürümünü veya bütün görselleri kapsamaz. Tam yedek için uygulamayı durdurun; yukarıdaki veri konumlarıyla birlikte proje dışında kullanılan hedef Excel dosyalarını da ayrı bir depolamaya kopyalayın. Düzenli geri yükleme denemesi yapın.
+**Yedek ve geri yükleme.** Program her açılışta günde bir kez görseller dahil tam anlık yedek alır (`yedekler/tam/`). Yedek içerik adreslidir: her dosya SHA-256'sıyla bir kez saklanır, değişmeyen dosyalar yeniden okunmaz; yedek klasörü yaklaşık veri kadar yer kaplar ve son 14 anlık yedek tutulur. Excel aktarımı hedef dosya için günde bir kez yazma öncesi kopya oluşturur (90 gün). Geri yükleme (program kapalıyken):
 
-Fişler isim, plaka ve firma bilgisi içerebilir. `.gitignore` birçok çalışma verisini dışlar; bu, şifreleme veya erişim kontrolü sağlamaz. Uygulamada kullanıcı hesabı, rol tabanlı yetkilendirme ve yerleşik HTTPS bulunmaz. İnternete açmayın, port yönlendirme yapmayın; erişimi güvenilir cihazlarla sınırlayın. Uygulama Türkçe fiş şablonuna ve belirli iş kurallarına göre tasarlanmıştır.
+```bash
+python -m mazot.yedekleme listele
+python -m mazot.yedekleme dogrula <kimlik>
+python -m mazot.yedekleme geri-yukle <kimlik>
+```
+
+Geri yükleme önce yedeği baştan sona doğrular; mevcut veri silinmez, `yedekler/geri_yukleme_oncesi_<zaman>/` altına taşınır; bir adım başarısız olursa mevcut veri yerine konur. Yedekler aynı diskte durur: disk arızasına karşı `yedekler/tam/` klasörünü ayrıca harici bir depolamaya kopyalayın. Proje dışındaki hedef Excel defterleri bu yedeğe girmez.
+
+**Erişim.** Hiç kullanıcı tanımlı değilse (tek kullanıcı modu) yalnız programın çalıştığı bilgisayar arayüzü kullanabilir; ağdan yalnız telefon anahtarlı bağlantıyla fotoğraf yüklenebilir. Birden çok kişi veya başka bilgisayarlar kullanacaksa kullanıcı tanımlayın; o andan itibaren herkes (bu bilgisayar dahil) adı ve parolasıyla girer ve her işlem kişiye bağlanır:
+
+```bash
+python -m mazot.erisim ekle ayse yonetici     # tüm yetkiler + tüm denetim geçmişi
+python -m mazot.erisim ekle veli kontrol      # görüntüle, düzelt, onayla, sil, Excel'e aktar
+python -m mazot.erisim ekle sofor yukleme     # yalnız fotoğraf yükleme
+```
+
+Aynı adresten 5 hatalı girişten sonra bir dakika beklenir. Fiş kaydında yükleyen, son düzenleyen, onaylayan, silen ve Excel'e aktaran tutulur; ayrıntılı geçmiş (alan bazında eski → yeni) `denetim/` altındadır ve arayüzde fişin altında özetlenir. Bağlantı HTTP'dir (yerel ağ içinde şifresiz): internete açmayın, port yönlendirme yapmayın; erişimi güvenilir ağlarla sınırlayın. Uygulama Türkçe fiş şablonuna ve belirli iş kurallarına göre tasarlanmıştır.
 
 <a id="tr-architecture"></a>
 
@@ -294,7 +312,7 @@ python -m tools.ocr_benchmark --model qwen2.5vl:7b --max-kenar 1600 \
   --images-dir /path/to/fisler --output /path/to/benchmark_sonucu.json
 ```
 
-Diğer ölçüm ve bakım araçları `tools/README.md` içinde listelenir. Windows'ta komutu tek satırda ve uygun dosya yollarıyla kullanın. Araç onaylı ve ham OCR alanları bulunan kayıtları örnekler; üretimdeki otomatik öğrenme düzeltmesini bütünüyle ölçmez. Model, donanım, görsel kümesi ve soğuk/sıcak çalışma koşullarını sonuçlarla birlikte kaydedin. Eksik görseller nedeniyle ölçülen örnek sayısı istenenden az olabilir. Sonuç dosyaları kişisel veri içerebilir.
+Diğer ölçüm ve bakım araçları `tools/README.md` içinde listelenir. Windows'ta komutu tek satırda ve uygun dosya yollarıyla kullanın. Araç onaylı ve ham OCR alanları bulunan kayıtları örnekler; üretimdeki otomatik öğrenme düzeltmesini bütünüyle ölçmez. Sabit test setinde `--esik-tam` / `--esik-alan` verilirse doğruluk eşiğin altına düşünce çıkış kodu 1 olur. Excel aktarımının doğruluğu `python -m tools.excel_dogruluk`, uzun süreli çalışma (kuyruk, bellek, disk) `python -m tools.uzun_sure_testi` ile ölçülür. `tests/test_kesinti.py` parti kapatma, yükleme, OCR ve Excel aktarımı sırasında süreci her dosya adımında öldürüp açılış kurtarmasının veriyi kayıpsız toparladığını doğrular. Model, donanım, görsel kümesi ve soğuk/sıcak çalışma koşullarını sonuçlarla birlikte kaydedin. Eksik görseller nedeniyle ölçülen örnek sayısı istenenden az olabilir. Sonuç dosyaları kişisel veri içerebilir.
 
 <a id="tr-limitations"></a>
 
@@ -302,12 +320,10 @@ Diğer ölçüm ve bakım araçları `tools/README.md` içinde listelenir. Windo
 
 Aşağıdaki durumlar kaynak incelemesinde belirlenmiştir; uygulamayı kritik kayıtların tek doğruluk kaynağı olarak kullanmadan önce değerlendirin:
 
-- Noktalı ondalık litre değeri, örneğin `12.5`, Excel dönüşümünde `125` olabilir. Aktarım öncesi kopyada sonucu kontrol edin.
-- Excel kaydedildikten sonra JSON yazımı başarısız olursa yeniden deneme mükerrer kayıt oluşturabilir. Hata sonrası hedef defteri incelemeden tekrar aktarmayın.
-- OCR sürerken yapılan kullanıcı işlemleri sonuç geldiğinde ezilebilir; işleme tamamlanana kadar kaydı değiştirmeyin.
-- OCR sonrası öğrenme veya kayıt hataları tek işçiyi durdurabilir; kuyruk ilerlemesini takip edin.
-- Eşzamanlı aktif/arşiv Excel istekleri ortak veri yolu durumunu değiştirebilir; çoklu sekmeden eşzamanlı aktarım/önizleme kullanmayın.
 - Başlangıç satırı seçimi dolu hücreleri ezebilir; hedef aralığı önceden doğrulayın.
+- Excel aktarımı defteri her seferinde baştan okuyup yazar; süre defter büyüklüğüyle orantılıdır (birkaç bin satırda birkaç saniye).
+- Yarım kalan bir Excel aktarımı, tekrar denendiğinde defterdeki gizli `_mazot_aktarim` sayfasındaki kimliklerle tamamlanır; bu sayfayı silmeyin. Yarım aktarımın satırı sonradan elle değiştirilmişse uygulama tahmin yürütmez, durur ve satırı kontrol etmenizi ister.
+- Kesinti dayanıklılığı süreç kesintisi içindir; elektrik kesintisinde işletim sisteminin disk önbelleği ayrıca risk taşır (UPS önerilir).
 - Bağımlılıklar tam sürümlerle kilitlenmemiştir. Kurulumlar arası davranış için aynı sürümleri ayrıca kaydedin.
 
 <a id="tr-troubleshooting"></a>
@@ -487,7 +503,7 @@ The startup script runs source code when `.venv\Scripts\python.exe` exists; othe
 
 ### Phone access and watched inbox
 
-With the phone and computer on the same trusted local network, open the terminal-displayed address `http://<computer-ip>:8765/cek`. If necessary, allow access through the operating system firewall only for a trusted local network.
+With the phone and computer on the same trusted local network, open the terminal-displayed link `http://<computer-ip>:8765/cek?anahtar=…` (the **Fiş Çek** button in the interface carries the same link). The key only grants uploading photos and seeing the results of one's own uploads; `python -m mazot.erisim anahtar-yenile` invalidates the old link. If necessary, allow access through the operating system firewall only for a trusted local network.
 
 For larger collections, use LocalSend, USB, or a folder synchronization tool to place images in `gelen_fisler/`. The watcher scans approximately every three seconds and accepts a file after it remains unchanged across two consecutive scans and passes the completeness check.
 
@@ -533,11 +549,29 @@ All mutable data lives in the `data/` directory at the repository root (override
 | `aktif_parti.json` | Active batch metadata |
 | `arsiv/` | Closed batches, images, and integrity manifests |
 | `output/` | Uploaded workbooks and last export settings |
-| `yedekler/` | Automatic JSON and Excel backups |
+| `yedekler/` | Automatic JSON and Excel backups; `yedekler/tam/` incremental full backup |
+| `denetim/<year-month>.jsonl` | Who uploaded/edited/approved/deleted/exported what, and when |
+| `kullanicilar.json` | Users (PBKDF2 password hashes), roles, phone upload key |
 
-At startup, `mazot/uygulama.py` backs up selected JSON/settings files once per day. Excel export creates a pre-write copy of each target workbook once per day. These backups do not capture every transaction version or all images. For a complete backup, stop the application and copy the data locations above, together with any external destination workbooks, to separate storage. Test restoration regularly.
+**Backup and restore.** Once per day at startup the application takes a full snapshot including images (`yedekler/tam/`). Snapshots are content-addressed: each file is stored once by SHA-256 and unchanged files are not re-read, so the backup is roughly the size of the data; the last 14 snapshots are kept. Excel export keeps a pre-write copy of each target workbook once per day (90 days). To restore (with the application stopped):
 
-Receipts may contain names, vehicle plates, and company information. `.gitignore` excludes many runtime files; it does not provide encryption or access control. The application has no user accounts, role-based authorization, or built-in HTTPS. Do not expose it to the internet or configure port forwarding; limit access to trusted devices. The application is designed around Turkish receipt layouts and specific business rules.
+```bash
+python -m mazot.yedekleme listele
+python -m mazot.yedekleme dogrula <id>
+python -m mazot.yedekleme geri-yukle <id>
+```
+
+Restore verifies the whole snapshot first; current data is not deleted but moved to `yedekler/geri_yukleme_oncesi_<time>/`, and if any step fails the current data is put back. Backups live on the same disk: copy `yedekler/tam/` to external storage to survive disk failure. Destination workbooks outside the data directory are not included.
+
+**Access.** With no users defined (single-user mode) only the computer running the application can use the interface; from the network, photos can only be uploaded through the keyed phone link. If several people or other computers will use it, define users; from then on everyone (including this computer) signs in and every action is attributed:
+
+```bash
+python -m mazot.erisim ekle ayse yonetici     # everything + full audit history
+python -m mazot.erisim ekle veli kontrol      # view, correct, approve, delete, export
+python -m mazot.erisim ekle sofor yukleme     # upload photos only
+```
+
+After 5 failed sign-ins from one address, sign-in is paused for a minute. Each receipt records who uploaded, last edited, approved, deleted, and exported it; the detailed history (old → new per field) is in `denetim/` and summarized under the receipt in the interface. The connection is plain HTTP on the local network: do not expose it to the internet or configure port forwarding; limit access to trusted networks. The application is designed around Turkish receipt layouts and specific business rules.
 
 <a id="en-architecture"></a>
 
@@ -612,7 +646,7 @@ python -m tools.ocr_benchmark --model qwen2.5vl:7b --max-kenar 1600 \
   --images-dir /path/to/fisler --output /path/to/benchmark_sonucu.json
 ```
 
-Other measurement and maintenance tools are listed in `tools/README.md`. On Windows, use a single command line and appropriate paths. The tool samples approved records with raw OCR fields; it does not fully measure the production learning-based correction stage. Record the model, hardware, image set, and cold/warm conditions alongside results. Missing images can reduce the measured sample count. Benchmark output may contain personal data.
+Other measurement and maintenance tools are listed in `tools/README.md`. On Windows, use a single command line and appropriate paths. The tool samples approved records with raw OCR fields; it does not fully measure the production learning-based correction stage. With the fixed test set, `--esik-tam` / `--esik-alan` make the tool exit with code 1 when accuracy falls below the threshold. Excel export accuracy is measured with `python -m tools.excel_dogruluk`, long-running behavior (queue, memory, disk) with `python -m tools.uzun_sure_testi`. `tests/test_kesinti.py` kills the process at every file-system step of batch closing, upload, OCR, and Excel export and verifies that startup recovery restores the data without loss. Record the model, hardware, image set, and cold/warm conditions alongside results. Missing images can reduce the measured sample count. Benchmark output may contain personal data.
 
 <a id="en-limitations"></a>
 
@@ -620,12 +654,10 @@ Other measurement and maintenance tools are listed in `tools/README.md`. On Wind
 
 The following conditions were identified during source review. Evaluate them before treating the application as the sole source of truth for critical records:
 
-- A dot-decimal fuel value such as `12.5` can become `125` during Excel conversion. Inspect the exported result on a copy.
-- If JSON writing fails after the workbook has been saved, retrying can create duplicate rows. Inspect the destination before retrying a failed export.
-- User actions during OCR can be overwritten when the result arrives. Wait for processing to finish before changing a record.
-- Post-OCR learning or persistence errors can stop the single worker. Monitor queue progress.
-- Concurrent active/archive Excel requests can change shared data-path state. Avoid simultaneous export/preview operations from multiple tabs.
 - Selecting a starting row can overwrite populated cells. Check the destination range first.
+- Excel export reads and rewrites the whole workbook each time; duration grows with workbook size (a few seconds at a few thousand rows).
+- An interrupted Excel export is completed on retry using the IDs in the hidden `_mazot_aktarim` sheet; do not delete that sheet. If the interrupted row was edited by hand afterwards, the application stops instead of guessing and asks you to check the row.
+- Crash safety covers process interruption; on power loss the operating system's disk cache is an additional risk (a UPS is recommended).
 - Dependencies are not locked to exact versions. Record installed versions when reproducing behavior across installations.
 
 <a id="en-troubleshooting"></a>

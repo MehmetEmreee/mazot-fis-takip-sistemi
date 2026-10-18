@@ -384,6 +384,10 @@ def main() -> None:
     parser.add_argument("--tahminler", type=Path,
                         help="{id: alanlar} biçiminde dışarıda üretilmiş tahminler")
     parser.add_argument("--limit", type=int, help="setin ilk N fişi (deneme için)")
+    parser.add_argument("--esik-tam", type=float,
+                        help="tam doğru fiş yüzdesi bunun altındaysa çıkış kodu 1")
+    parser.add_argument("--esik-alan", type=float,
+                        help="ortalama alan doğruluğu bunun altındaysa çıkış kodu 1")
     args = parser.parse_args()
 
     if args.set_olustur:
@@ -410,6 +414,14 @@ def main() -> None:
     output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({k: v for k, v in report.items() if k != "sonuclar"}, ensure_ascii=False, indent=2))
     print(f"Rapor: {output}")
+    dusuk = []
+    if args.esik_tam is not None and (report.get("tam_dogru_fis") or 0) < args.esik_tam:
+        dusuk.append(f"tam doğru fiş %{report.get('tam_dogru_fis')} < %{args.esik_tam}")
+    if args.esik_alan is not None and (report.get("alan_dogrulugu") or 0) < args.esik_alan:
+        dusuk.append(f"alan doğruluğu %{report.get('alan_dogrulugu')} < %{args.esik_alan}")
+    if dusuk:
+        print("EŞİK ALTINDA: " + "; ".join(dusuk))
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

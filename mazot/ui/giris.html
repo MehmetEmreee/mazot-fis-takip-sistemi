@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>Giriş · Fiş Kontrol</title>
+    <link rel="stylesheet" href="/ui/style.css" />
+    <style>
+      body { display: grid; place-items: center; overflow: auto; padding: 16px; }
+      .login { width: min(360px, 100%); padding: 26px; border: 1px solid var(--line); border-radius: 16px; background: var(--paper); box-shadow: var(--shadow); }
+      .login h1 { margin: 0 0 4px; font: 700 22px/1.2 Georgia, serif; }
+      .login p { margin: 0 0 18px; color: var(--muted); font-size: 13px; }
+      .login label { display: grid; gap: 6px; margin-bottom: 14px; font-size: 12px; font-weight: 700; color: var(--muted); }
+      .login input { height: 42px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 15px; color: var(--ink); }
+      .login .button { width: 100%; }
+      .login .hata { min-height: 18px; margin: 10px 0 0; color: #8a3328; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <form class="login" id="girisForm" autocomplete="on">
+      <h1>Fiş Kontrol</h1>
+      <p>Devam etmek için giriş yapın.</p>
+      <label>Kullanıcı adı <input name="ad" autocomplete="username" required autofocus /></label>
+      <label>Parola <input name="parola" type="password" autocomplete="current-password" required /></label>
+      <button class="button primary" type="submit">Giriş yap</button>
+      <p class="hata" id="hata" role="alert"></p>
+    </form>
+    <script>
+      const form = document.getElementById("girisForm");
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const hata = document.getElementById("hata");
+        hata.textContent = "";
+        try {
+          const response = await fetch("/api/giris", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ad: form.elements.ad.value.trim(), parola: form.elements.parola.value }),
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || "Giriş başarısız");
+          const sonra = new URLSearchParams(location.search).get("sonra");
+          location.href = sonra && sonra.startsWith("/") && !sonra.startsWith("//") ? sonra : "/";
+        } catch (error) {
+          hata.textContent = error.message;
+          form.elements.parola.value = "";
+        }
+      });
+    </script>
+  </body>
+</html>

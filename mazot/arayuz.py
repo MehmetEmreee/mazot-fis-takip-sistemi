@@ -38,6 +38,8 @@ from . import excel_ogrenme  # noqa: E402
 from . import alan_yeniden_okuma  # noqa: E402
 from . import parti_yonetimi  # noqa: E402
 from . import yollar  # noqa: E402
+from . import denetim  # noqa: E402
+from . import erisim  # noqa: E402
 
 try:  # iPhone HEIC fotoğraflarını Pillow ile açabilmek için (pillow-heif)
     from pillow_heif import register_heif_opener
@@ -79,6 +81,23 @@ HEIF_MARKALARI = {b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx", b"mif1",
 GELEN_UZANTILARI = IMAGE_EXTENSIONS | HEIC_UZANTILARI
 # Klasör izleyicisinin son durumu; /api/gelen buradan okur.
 GELEN_DURUM: dict = {}
+# Açılıştaki parti kurtarmasının sonucu; çakışma varsa arayüzde uyarı olur.
+PARTI_KURTARMA: dict | None = None
+
+# Uç noktaların gerektirdiği yetki (bkz. erisim.ROLLER).
+GET_YETKILERI = {
+    "/api/partiler": "goruntule", "/api/gelen": "goruntule",
+    "/api/receipts": "goruntule", "/api/image": "goruntule",
+    "/api/durum": "goruntule", "/api/denetim": "goruntule",
+    "/api/excel/files": "aktar", "/api/excel/sheets": "aktar",
+    "/api/excel/preview": "aktar",
+}
+POST_YETKILERI = {
+    "/api/partiler/yeni": "aktar", "/api/save": "duzenle", "/api/upload": "yukle",
+    "/api/gelen/ac": "duzenle", "/api/delete": "duzenle", "/api/retry": "duzenle",
+    "/api/export-excel": "aktar", "/api/excel/upload": "aktar",
+    "/api/excel/learn": "aktar",
+}
 
 ORIJINAL_AD_SINIRI = 120
 KAYNAKLAR = {"telefon", "toplu", "klasor"}
@@ -308,7 +327,7 @@ def imza_uzantisi(data: bytes) -> str | None:
 
 
 def fotografi_kabul_et(data: bytes, ext: str | None, orijinal_ad: str | None = None,
-                       kaynak: str = "telefon") -> dict:
+                       kaynak: str = "telefon", kim: dict | None = None) -> dict:
     """Bir fiş fotoğrafını temp/ klasörüne kaydeder, "işleniyor" kaydını
     sonuclar.json'a ekler ve OCR kuyruğuna koyar.
 
@@ -340,22 +359,7 @@ def fotografi_kabul_et(data: bytes, ext: str | None, orijinal_ad: str | None = N
     ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
     upload_id = uuid.uuid4().hex
     filename = f"fis_{ts}_{upload_id[:6]}{ext}"
-    dest = temp_dir() / filename
     image_hash = hashlib.sha256(data).hexdigest()
-    with DATA_LOCK:
-        onceki_dosya = IMAGE_HASHES.get(image_hash)
-        if onceki_dosya:
-            return {"ok": False, "duplicate": True, "existing_filename": onceki_dosya}
-        # Eşzamanlı özdeş isteklerin ikisinin de kabul edilmesini önle.
-        IMAGE_HASHES[image_hash] = filename
-    try:
-        dest.write_bytes(data)
-    except OSError:
-        with DATA_LOCK:
-            if IMAGE_HASHES.get(image_hash) == filename:
-                IMAGE_HASHES.pop(image_hash, None)
-        raise
-
     kayit = {
         "_dosya": filename,
         "_isleniyor": True,
@@ -363,114 +367,259 @@ def fotografi_kabul_et(data: bytes, ext: str | None, orijinal_ad: str | None = N
         "_dosya_hash": image_hash,
         "_yukleme_zamani": datetime.now().isoformat(timespec="seconds"),
         "_kaynak": kaynak,
+        "_yukleyen": (kim or {}).get("ad") or kaynak,
         "_kontrol_gerekli": True,
         "_kontrol_nedeni": "OCR kuyruğunda",
     }
     if orijinal_ad:
         kayit["_orijinal_ad"] = orijinal_ad
     record = fis_normalize_et(kayit)
-    try:
-        with DATA_LOCK:
+
+    # Tekrar kontrolü, görselin yazılması, kaydın eklenmesi ve kuyruğa alma
+    # tek kritik bölümde: arada parti kapanırsa görsel ile kayıt farklı
+    # partilere düşerdi. Parti kapatma da aynı kilidi tutar.
+    with DATA_LOCK:
+        onceki_dosya = IMAGE_HASHES.get(image_hash)
+        if onceki_dosya:
+            return {"ok": False, "duplicate": True, "existing_filename": onceki_dosya}
+        dest = temp_dir() / filename
+        IMAGE_HASHES[image_hash] = filename
+        try:
+            dest.write_bytes(data)
             receipts = load_receipts()
             receipts.append(record)
             save_receipts(receipts)
-    except (OSError, ValueError):
-        # Kayıt yazılamadıysa yarım kalmış dosyayı ve hash'i geri al.
-        with DATA_LOCK:
+        except (OSError, ValueError):
+            # Kayıt yazılamadıysa yarım kalmış dosyayı ve hash'i geri al.
             if IMAGE_HASHES.get(image_hash) == filename:
                 IMAGE_HASHES.pop(image_hash, None)
-        dest.unlink(missing_ok=True)
-        raise
+            dest.unlink(missing_ok=True)
+            raise
+        OCR_QUEUE.put((dest, image_hash))
+        queue_size = OCR_QUEUE.qsize()
 
-    OCR_QUEUE.put((dest, image_hash))
+    try:
+        denetim.kaydet("yukle", kim or {"ad": kaynak}, dosya=filename, kayit=upload_id,
+                       kaynak=kaynak, orijinal_ad=orijinal_ad)
+    except OSError as exc:  # fotoğraf kabul edildi; kaybetmektense uyar
+        print(f"Denetim kaydı yazılamadı (yükleme {filename}): {exc}")
     return {
         "ok": True,
         "filename": filename,
         "receipt": record,
-        "queue_size": OCR_QUEUE.qsize(),
+        "queue_size": queue_size,
     }
 
 
-def ocr_worker() -> None:
-    """Yüklenen görselleri arka planda, GPU'yu yormadan tek tek işler."""
-    while True:
-        image_path, image_hash = OCR_QUEUE.get()
-        original_name = image_path.name
+def _ocr_sonrasi_duzelt(record: dict, image_path: Path) -> None:
+    """Öğrenme ve alan yeniden okuma isteğe bağlı iyileştirmelerdir; biri
+    hata verirse OCR sonucu korunur ve kayıt kontrole işaretlenir."""
+    ham_kayit = copy.deepcopy(record)
+    for ad, adim in (
+        ("Excel öğrenmesi", lambda: excel_ogrenme.guvenli_otomatik_duzelt(record)),
+        # Geçmişte karşılığı olmayan alanı kırpıp alan adıyla yeniden okut.
+        ("alan yeniden okuma",
+         lambda: alan_yeniden_okuma.yeniden_oku_ve_duzelt(record, ham_kayit, image_path)),
+    ):
         try:
+            adim()
+        except Exception as exc:
+            print(f"OCR sonrası {ad} atlandı ({image_path.name}): {exc}")
+            record.setdefault("_uyarilar", []).append(f"{ad} yapılamadı: {exc}")
+
+
+def fisi_isle(image_path: Path, image_hash: str) -> None:
+    """Kuyruktaki tek fişi okur, fiş no ile adlandırır ve kaydını günceller.
+
+    Kayıt, kuyruğa alındığı andaki dosya adıyla (original_name) bulunur.
+    Yeniden adlandırma ile JSON yazımı arasında süreç kesilirse başlangıçtaki
+    yarim_ocr_kayitlarini_kurtar() görseli kayıttaki _dosya_hash ile bulur.
+    """
+    original_name = image_path.name
+    try:
+        record = resmi_oku(image_path)
+    except Exception as exc:
+        record = fis_normalize_et({
+            "_dosya": original_name,
+            "HATA": str(exc),
+            "_kontrol_gerekli": True,
+            "_kontrol_nedeni": "işleme hatası",
+        })
+
+    if not record.get("HATA"):
+        _ocr_sonrasi_duzelt(record, image_path)
+        kaydi_dogrula(fis_normalize_et(record))
+
+    record["_isleniyor"] = False
+    record["_dosya_hash"] = image_hash
+    record["_dosya"] = original_name
+    with DATA_LOCK:
+        receipts = load_receipts()
+        index = next(
+            (i for i, item in enumerate(receipts)
+             if item.get("_dosya") == original_name),
+            None,
+        )
+
+        # OCR başarılıysa fiş no ile adlandırma kuralını koru (hâlâ temp/'te).
+        fis_no = guvenli_fis_no(record.get("fis_no")) if not record.get("HATA") else None
+        if fis_no and image_path.name != f"{fis_no}{image_path.suffix.lower()}":
             try:
-                record = resmi_oku(image_path)
-            except Exception as exc:
-                record = fis_normalize_et({
-                    "_dosya": original_name,
-                    "HATA": str(exc),
-                    "_kontrol_gerekli": True,
-                    "_kontrol_nedeni": "işleme hatası",
-                })
-
-            if not record.get("HATA"):
-                ham_kayit = copy.deepcopy(record)
-                excel_ogrenme.guvenli_otomatik_duzelt(record)
-                # Geçmişte karşılığı olmayan alanı kırpıp alan adıyla yeniden okut.
-                alan_yeniden_okuma.yeniden_oku_ve_duzelt(record, ham_kayit, image_path)
-                kaydi_dogrula(fis_normalize_et(record))
-
-            # OCR başarılıysa fiş no ile adlandırma kuralını koru (hâlâ temp/'te).
-            if not record.get("HATA"):
-                fis_no = guvenli_fis_no(record.get("fis_no"))
-                if fis_no:
-                    try:
-                        with DATA_LOCK:
-                            mevcut_kayitlar = load_receipts()
-                        yeni_hedef = benzersiz_kayit_adi(
-                            temp_dir(), fis_no, image_path.suffix.lower(),
-                            [k for k in mevcut_kayitlar
-                             if k.get("_dosya") != original_name],
-                        )
-                        image_path.rename(yeni_hedef)
-                        image_path = yeni_hedef
-                        record["_dosya"] = image_path.name
-                    except OSError:
-                        record["_dosya"] = original_name
-
-            record["_isleniyor"] = False
-            record["_dosya_hash"] = image_hash
-            with DATA_LOCK:
-                receipts = load_receipts()
-                index = next(
-                    (i for i, item in enumerate(receipts)
-                     if item.get("_dosya") == original_name),
-                    None,
+                yeni_hedef = benzersiz_kayit_adi(
+                    image_path.parent, fis_no, image_path.suffix.lower(),
+                    [k for k in receipts if k.get("_dosya") != original_name],
                 )
-                if index is None:
-                    receipts.append(record)
-                    index = len(receipts) - 1
-                else:
-                    onceki = receipts[index]
-                    record["_yukleme_zamani"] = onceki.get("_yukleme_zamani")
-                    record["_yukleme_id"] = onceki.get("_yukleme_id")
-                    for anahtar in ("_orijinal_ad", "_kaynak"):
-                        if onceki.get(anahtar):
-                            record[anahtar] = onceki[anahtar]
-                    receipts[index] = record
+                image_path.rename(yeni_hedef)
+                record["_dosya"] = yeni_hedef.name
+            except OSError:
+                record["_dosya"] = original_name
 
-                IMAGE_HASHES[image_hash] = record.get("_dosya", original_name)
-                fis_no = str(record.get("fis_no") or "").strip()
-                if re.fullmatch(r"\d{6}", fis_no):
-                    diger = next(
-                        (item for i, item in enumerate(receipts)
-                         if i != index and not item.get("_isleniyor")
-                         and not item.get("_silindi")
-                         and str(item.get("fis_no") or "").strip() == fis_no),
-                        None,
-                    )
-                    if diger:
-                        record["_tekrar"] = True
-                        record["_tekrar_nedeni"] = (
-                            f"Aynı fiş no daha önce yüklendi: {diger.get('_dosya', '-')}"
-                        )
-                save_receipts(receipts)
+        if index is None:
+            receipts.append(record)
+            index = len(receipts) - 1
+        else:
+            onceki = receipts[index]
+            record["_yukleme_zamani"] = onceki.get("_yukleme_zamani")
+            record["_yukleme_id"] = onceki.get("_yukleme_id")
+            for anahtar in ("_orijinal_ad", "_kaynak", "_yukleyen", "_deneme_sayisi"):
+                if onceki.get(anahtar):
+                    record[anahtar] = onceki[anahtar]
+            receipts[index] = record
+
+        IMAGE_HASHES[image_hash] = record.get("_dosya", original_name)
+        fis_no = str(record.get("fis_no") or "").strip()
+        if re.fullmatch(r"\d{6}", fis_no):
+            diger = next(
+                (item for i, item in enumerate(receipts)
+                 if i != index and not item.get("_isleniyor")
+                 and not item.get("_silindi")
+                 and str(item.get("fis_no") or "").strip() == fis_no),
+                None,
+            )
+            if diger:
+                record["_tekrar"] = True
+                record["_tekrar_nedeni"] = (
+                    f"Aynı fiş no daha önce yüklendi: {diger.get('_dosya', '-')}"
+                )
+        save_receipts(receipts)
+    try:
+        denetim.kaydet("ocr_hatasi" if record.get("HATA") else "ocr", {"ad": "ocr", "rol": "sistem"},
+                       dosya=record.get("_dosya"), kayit=record.get("_yukleme_id"),
+                       onceki_dosya=original_name if record.get("_dosya") != original_name else None,
+                       hata=record.get("HATA"), fis_no=record.get("fis_no"))
+    except OSError as exc:
+        print(f"Denetim kaydı yazılamadı (OCR {original_name}): {exc}")
+
+
+def _islem_hatasini_kaydet(image_path: Path, image_hash: str, exc: Exception) -> None:
+    """fisi_isle beklenmedik hata verdiyse kaydı 'işleniyor'da bırakmaz."""
+    with DATA_LOCK:
+        receipts = load_receipts()
+        mevcut = image_path if image_path.exists() else None
+        if mevcut is None and IMAGE_HASHES.get(image_hash):
+            mevcut = find_image(IMAGE_HASHES[image_hash])
+        for receipt in receipts:
+            if receipt.get("_isleniyor") and (
+                receipt.get("_dosya") == image_path.name
+                or (image_hash and receipt.get("_dosya_hash") == image_hash)
+            ):
+                if mevcut is not None:
+                    receipt["_dosya"] = mevcut.name
+                receipt["_isleniyor"] = False
+                receipt["HATA"] = f"İşleme hatası: {exc}"
+                break
+        save_receipts(receipts)
+
+
+def ocr_worker(kuyruk: queue.Queue | None = None) -> None:
+    """Yüklenen görselleri arka planda, GPU'yu yormadan tek tek işler.
+
+    Bir fişteki hiçbir hata (bozuk kuyruk öğesi dahil) işçiyi durdurmaz;
+    kuyruktaki sonraki fişe geçilir. İşçi başlatıldığı kuyruğa bağlı kalır.
+    """
+    kuyruk = kuyruk or OCR_QUEUE
+    while True:
+        is_ = kuyruk.get()
+        try:
+            image_path, image_hash = is_
+            image_path = Path(image_path)
+            fisi_isle(image_path, image_hash)
+        except Exception as exc:
+            print(f"OCR işçisi: {is_!r} işlenemedi: {exc}")
+            try:
+                _islem_hatasini_kaydet(Path(is_[0]), is_[1], exc)
+            except Exception as kayit_hatasi:
+                # Kayıtta _dosya_hash var; yeniden başlatmada kurtarılır.
+                print(f"OCR işçisi: hata kaydı da yazılamadı: {kayit_hatasi}")
         finally:
-            OCR_QUEUE.task_done()
+            kuyruk.task_done()
+
+
+def yarim_ocr_kayitlarini_kurtar() -> list[tuple[Path, str]]:
+    """Başlangıçta 'işleniyor' kalmış kayıtları ve kayıtsız yüklemeleri
+    görselleriyle uzlaştırır.
+
+    Görsel kayıttaki adla bulunamazsa (ör. fiş no ile yeniden adlandırıldıktan
+    sonra süreç kesildi) _dosya_hash ile aranır ve kayıt yeni ada bağlanır.
+    Hiç bulunamayan kayıtlar sonsuza dek 'işleniyor' kalmasın diye hata olarak
+    işaretlenir. Yeniden kuyruğa alınacak işleri döndürür.
+    """
+    isler: list[tuple[Path, str]] = []
+    with DATA_LOCK:
+        receipts = load_receipts()
+        kullanilan = {r.get("_dosya") for r in receipts}
+        degisti = False
+        for receipt in receipts:
+            if not receipt.get("_isleniyor") or receipt.get("_silindi"):
+                continue
+            ad = receipt.get("_dosya") or ""
+            image_path = find_image(ad) if ad else None
+            image_hash = receipt.get("_dosya_hash")
+            if image_path is None and image_hash and IMAGE_HASHES.get(image_hash):
+                aday = IMAGE_HASHES[image_hash]
+                if aday not in kullanilan:
+                    image_path = find_image(aday)
+                if image_path is not None:
+                    receipt["_dosya"] = image_path.name
+                    kullanilan.add(image_path.name)
+                    degisti = True
+            if image_path is not None:
+                isler.append((image_path, image_hash or dosya_hashi(image_path)))
+                continue
+            receipt["_isleniyor"] = False
+            receipt["HATA"] = "Görsel bulunamadı (işlem yarıda kesilmiş olabilir)"
+            degisti = True
+
+        # Görsel yazılıp kayıt eklenemeden kesilen yüklemeler: kayıtsız görsel
+        # hem kaybolur hem de hash indeksi aynı fotoğrafın yeniden yüklenmesini
+        # engellerdi. Yeni bir 'işleniyor' kaydıyla kuyruğa geri alınır.
+        temp = FISLER_DIR / "temp"
+        yetimler = sorted(
+            yol for yol in (temp.iterdir() if temp.is_dir() else [])
+            if yol.is_file() and yol.suffix.lower() in IMAGE_EXTENSIONS
+            and yol.name not in kullanilan
+        )
+        for yol in yetimler:
+            image_hash = dosya_hashi(yol)
+            receipts.append(fis_normalize_et({
+                "_dosya": yol.name,
+                "_isleniyor": True,
+                "_yukleme_id": uuid.uuid4().hex,
+                "_dosya_hash": image_hash,
+                "_yukleme_zamani": datetime.fromtimestamp(
+                    yol.stat().st_mtime).isoformat(timespec="seconds"),
+                "_kaynak": "kurtarilan",
+            }))
+            kullanilan.add(yol.name)
+            isler.append((yol, image_hash))
+            degisti = True
+        if degisti:
+            save_receipts(receipts)
+
+    # Yarıda kesilmiş atomik yazımlardan kalan geçici dosyalar.
+    for gecici in DATA_FILE.parent.glob(f".{DATA_FILE.name}.*.tmp"):
+        gecici.unlink(missing_ok=True)
+    return isler
 
 
 def _gelen_yarim_mi(ad: str) -> bool:
@@ -727,20 +876,84 @@ def find_image(filename: str, images_dir: Path | None = None) -> Path | None:
     return None
 
 
+class IslemCakismasi(Exception):
+    """Kayıt şu an başka bir işlem (OCR) tarafından güncelleniyor."""
+
+
+def _cerez(ad: str, deger: str, sure_sn: int) -> str:
+    return f"{ad}={deger}; Path=/; HttpOnly; SameSite=Lax; Max-Age={sure_sn}"
+
+
+def durum_ozeti() -> dict:
+    """Arayüzün göstereceği bekleyen/başarısız işler özeti."""
+    with DATA_LOCK:
+        kayitlar = [k for k in load_receipts() if not k.get("_silindi")]
+    hatali_gelen = GELEN_DIR / GELEN_HATALI
+    return {
+        "kuyruk": OCR_QUEUE.qsize(),
+        "isleniyor": sum(bool(k.get("_isleniyor")) for k in kayitlar),
+        "ocr_hatali": [k.get("_dosya") for k in kayitlar if k.get("HATA")],
+        "excel_yarim": [k.get("_dosya") for k in kayitlar if k.get("_excel_bekleyen")],
+        "gelen_hatali": sum(1 for p in hatali_gelen.rglob("*") if p.is_file())
+        if hatali_gelen.is_dir() else 0,
+        "gelen_klasoru": str(hatali_gelen),
+        "parti_uyarisi": PARTI_KURTARMA if (PARTI_KURTARMA or {}).get("durum") == "cakisma" else None,
+    }
+
+
 class ReceiptHandler(SimpleHTTPRequestHandler):
     server_version = "FisKontrol/1.0"
 
     def log_message(self, format: str, *args) -> None:
         print(f"[{self.log_date_time_string()}] {format % args}")
 
-    def send_json(self, payload, status=HTTPStatus.OK) -> None:
+    def send_json(self, payload, status=HTTPStatus.OK, cerez: str | None = None) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        if cerez:
+            self.send_header("Set-Cookie", cerez)
         self.end_headers()
         self.wfile.write(body)
+
+    def yonlendir(self, hedef: str, cerez: str | None = None) -> None:
+        self.send_response(HTTPStatus.FOUND)
+        self.send_header("Location", hedef)
+        if cerez:
+            self.send_header("Set-Cookie", cerez)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def istemci(self) -> str:
+        return str(self.client_address[0])
+
+    def kim(self) -> dict | None:
+        if not hasattr(self, "_kim"):
+            try:
+                self._kim = erisim.kimlik(self.headers.get("Cookie"), self.istemci())
+            except erisim.ErisimHatasi as exc:
+                print(f"Erişim: {exc}")
+                self._kim = None
+        return self._kim
+
+    def yetkili(self, yetki: str | None) -> bool:
+        """Yetki yoksa 401/403 gönderir ve False döner."""
+        if yetki is None:
+            return True
+        kim = self.kim()
+        if erisim.yetkili_mi(kim, yetki):
+            return True
+        if kim is None:
+            self.send_json({"error": "Giriş gerekli", "giris_gerekli": True},
+                           HTTPStatus.UNAUTHORIZED)
+        else:
+            self.send_json({"error": "Bu işlem için yetkiniz yok"}, HTTPStatus.FORBIDDEN)
+        return False
+
+    def denetle(self, islem: str, **ayrinti) -> None:
+        denetim.kaydet(islem, self.kim(), istemci=self.istemci(), **ayrinti)
 
     def read_json(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))
@@ -748,6 +961,53 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+
+        if parsed.path == "/api/oturum":
+            kim = self.kim()
+            yanit = {"kim": kim, "kullanici_modu": erisim.kullanici_var_mi()}
+            if erisim.yetkili_mi(kim, "aktar"):
+                yanit["telefon_baglantisi"] = f"/cek?anahtar={erisim.yukleme_anahtari()}"
+            self.send_json(yanit)
+            return
+        if parsed.path == "/giris":
+            self.path = "/giris.html"
+            super().do_GET()
+            return
+        if parsed.path == "/cek":
+            anahtar = parse_qs(parsed.query).get("anahtar", [""])[0]
+            if anahtar and anahtar == erisim.yukleme_anahtari():
+                self.yonlendir("/cek", _cerez(erisim.YUKLEME_COOKIE, anahtar, 365 * 86400))
+                return
+            if not erisim.yetkili_mi(self.kim(), "yukle"):
+                self.yonlendir("/giris?sonra=/cek")
+                return
+        if parsed.path in ("/", "/index.html"):
+            kim = self.kim()
+            if kim is None:
+                self.yonlendir("/giris")
+                return
+            if not erisim.yetkili_mi(kim, "goruntule"):
+                self.yonlendir("/cek")
+                return
+        yetki = GET_YETKILERI.get(parsed.path)
+        if parsed.path == "/api/receipts" and erisim.yetkili_mi(self.kim(), "yukle"):
+            yetki = None  # telefon yalnız kendi yüklemelerini görür (aşağıda)
+        if parsed.path.startswith("/api/") and yetki is None and parsed.path not in GET_YETKILERI:
+            yetki = "goruntule"
+        if not self.yetkili(yetki):
+            return
+
+        if parsed.path == "/api/durum":
+            self.send_json(durum_ozeti())
+            return
+
+        if parsed.path == "/api/denetim":
+            query = parse_qs(parsed.query)
+            aranan = query.get("dosya", [None])[0]
+            if not aranan and not self.yetkili("yonet"):
+                return
+            self.send_json({"olaylar": denetim.oku(aranan, limit=500 if not aranan else 100)})
+            return
 
         if parsed.path == "/api/partiler":
             self.send_json({"partiler": parti_yonetimi.partileri_listele()})
@@ -775,6 +1035,10 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
                 data_file, _, salt_okunur = parti_yonetimi.parti_yollari(parti_id)
                 with DATA_LOCK:
                     receipts = [r for r in load_receipts_from(data_file) if not r.get("_silindi")]
+                    if not erisim.yetkili_mi(self.kim(), "goruntule"):
+                        kim = self.kim() or {}
+                        receipts = [] if salt_okunur else [
+                            r for r in receipts if r.get("_yukleyen") == kim.get("ad")]
                     for receipt in receipts:
                         receipt["_excel_onerileri"] = excel_ogrenme.kayit_onerileri(receipt)
                     modified = (
@@ -818,11 +1082,10 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
             try:
                 parti_id = parse_qs(parsed.query).get("parti", ["aktif"])[0]
                 data_file, _, _ = parti_yonetimi.parti_yollari(parti_id)
-                excel_aktar.DATA_FILE = data_file
                 self.send_json({
                     "dosyalar": excel_aktar.excel_dosyalarini_bul(),
                     "son_ayar": excel_aktar.son_ayar(),
-                    "bekleyen": len(excel_aktar.bekleyen_kayitlar()),
+                    "bekleyen": len(excel_aktar.bekleyen_kayitlar(data_file=data_file)),
                     "ogrenme": excel_ogrenme.durum(),
                 })
             except Exception as exc:
@@ -850,12 +1113,12 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
                 if not excel_aktar.yol_guvenli_mi(yol):
                     raise ValueError("Bu dosyaya erişim izni yok")
                 data_file, _, _ = parti_yonetimi.parti_yollari(parti_id)
-                excel_aktar.DATA_FILE = data_file
                 tumu = query.get("tumu", ["0"])[0] in ("1", "true", "True")
                 onizleme = excel_aktar.sayfa_onizleme(yol, sayfa)
-                onizleme["bekleyen"] = len(excel_aktar.bekleyen_kayitlar(tumu=tumu))
+                kayitlar = excel_aktar.yukle_json(data_file, [])
+                onizleme["bekleyen"] = len(excel_aktar.bekleyen_kayitlar(kayitlar, tumu=tumu))
                 onizleme["aktarilmis"] = len(
-                    [k for k in excel_aktar.bekleyen_kayitlar(tumu=True)
+                    [k for k in excel_aktar.bekleyen_kayitlar(kayitlar, tumu=True)
                      if k.get("_excel_aktarildi")]
                 )
                 self.send_json(onizleme)
@@ -873,7 +1136,17 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path == "/api/partiler/yeni":
+        if path == "/api/giris":
+            self.handle_login()
+            return
+        if path == "/api/cikis":
+            self.handle_logout()
+            return
+        if not self.yetkili(POST_YETKILERI.get(path, "yonet")):
+            return
+        if path == "/api/retry":
+            self.handle_retry()
+        elif path == "/api/partiler/yeni":
             self.handle_new_batch()
         elif path == "/api/save":
             self.handle_save()
@@ -891,6 +1164,72 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
             self.handle_excel_learn()
         else:
             self.send_error(HTTPStatus.NOT_FOUND)
+
+    def handle_login(self) -> None:
+        try:
+            payload = self.read_json()
+            ad = str(payload.get("ad") or "")
+            anahtar = erisim.giris_yap(ad, payload.get("parola"), self.istemci())
+        except (erisim.ErisimHatasi, json.JSONDecodeError) as exc:
+            try:
+                denetim.kaydet("giris_basarisiz", {"ad": locals().get("ad") or "?"},
+                               istemci=self.istemci(), hata=str(exc))
+            except OSError:
+                pass
+            self.send_json({"error": str(exc)}, HTTPStatus.UNAUTHORIZED)
+            return
+        self._kim = erisim.kimlik(f"{erisim.OTURUM_COOKIE}={anahtar}", self.istemci())
+        self.denetle("giris")
+        self.send_json({"ok": True, "kim": self._kim},
+                       cerez=_cerez(erisim.OTURUM_COOKIE, anahtar, erisim.OTURUM_SURESI_SN))
+
+    def handle_logout(self) -> None:
+        oturum = erisim.cerezleri_ayristir(self.headers.get("Cookie")).get(erisim.OTURUM_COOKIE)
+        if self.kim():
+            try:
+                self.denetle("cikis")
+            except OSError:
+                pass
+        erisim.cikis_yap(oturum)
+        self.send_json({"ok": True}, cerez=_cerez(erisim.OTURUM_COOKIE, "", 0))
+
+    def handle_retry(self) -> None:
+        """OCR'ı başarısız olmuş fişi güvenle yeniden kuyruğa alır."""
+        try:
+            payload = self.read_json()
+            filename = payload.get("filename")
+            if not isinstance(filename, str) or not filename:
+                raise ValueError("Geçersiz dosya adı")
+            with DATA_LOCK:
+                receipts = load_receipts()
+                eslesen = [r for r in receipts
+                           if r.get("_dosya") == filename and not r.get("_silindi")]
+                if len(eslesen) != 1:
+                    raise LookupError(f"Kayıt bulunamadı: {filename}")
+                receipt = eslesen[0]
+                if receipt.get("_isleniyor"):
+                    raise IslemCakismasi("Bu fiş zaten işleniyor")
+                if not receipt.get("HATA"):
+                    raise IslemCakismasi("Bu fişte tekrar denenecek bir hata yok")
+                image_path = find_image(filename)
+                if image_path is None:
+                    raise LookupError("Fişin görseli bulunamadı; tekrar denenemez")
+                image_hash = receipt.get("_dosya_hash") or dosya_hashi(image_path)
+                onceki_hata = receipt.pop("HATA")
+                receipt["_isleniyor"] = True
+                receipt["_dosya_hash"] = image_hash
+                receipt["_deneme_sayisi"] = int(receipt.get("_deneme_sayisi") or 0) + 1
+                save_receipts(receipts)
+                OCR_QUEUE.put((image_path, image_hash))
+            self.denetle("tekrar_dene", dosya=filename, kayit=receipt.get("_yukleme_id"),
+                         onceki_hata=onceki_hata)
+            self.send_json({"ok": True, "queue_size": OCR_QUEUE.qsize()})
+        except IslemCakismasi as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.CONFLICT)
+        except LookupError as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        except (ValueError, json.JSONDecodeError, OSError) as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
     def handle_new_batch(self) -> None:
         """Aktif partiyi Excel'e dokunmadan arşivler ve temiz parti açar."""
@@ -915,6 +1254,9 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
 
                 sonuc = parti_yonetimi.yeni_parti(ad, None)
                 hash_indeksini_hazirla()
+                arsiv = sonuc.get("arsivlenen") or {}
+                self.denetle("parti_kapat", arsiv=arsiv.get("id"), arsiv_adi=arsiv.get("ad"),
+                             kayit_sayisi=arsiv.get("toplam"), yeni_parti=ad)
 
             self.send_json({"ok": True, **sonuc})
         except (ValueError, json.JSONDecodeError, OSError) as exc:
@@ -942,6 +1284,11 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
                 receipt = eslesen[0] if eslesen else None
                 if receipt is None:
                     raise LookupError(f"Kayıt bulunamadı: {filename}")
+                if receipt.get("_isleniyor"):
+                    # OCR bitince kayıt OCR sonucuyla değişir; değişiklik kaybolmasın.
+                    raise IslemCakismasi(
+                        "Bu fişin OCR işlemi sürüyor; bitince tekrar deneyin."
+                    )
 
                 changed = False
                 changed_fields: set[str] = set()
@@ -959,12 +1306,26 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
 
                 kaydi_dogrula(fis_normalize_et(receipt))
 
+                onay_onceki = bool(receipt.get("_onaylandi"))
+                zaman = datetime.now().isoformat(timespec="seconds")
+                kullanici = (self.kim() or {}).get("ad")
                 receipt["_onaylandi"] = approved
                 receipt["_duzeltildi"] = bool(receipt.get("_duzeltildi")) or changed
-                receipt["_kontrol_zamani"] = datetime.now().isoformat(timespec="seconds")
+                receipt["_kontrol_zamani"] = zaman
+                receipt["_son_duzenleyen"] = kullanici
                 if approved:
+                    receipt["_onaylayan"] = kullanici
+                    receipt["_onay_zamani"] = zaman
                     firma_klasorune_tasi(receipt)
                 save_receipts(receipts)
+                self.denetle(
+                    "onayla" if approved else ("onay_kaldir" if onay_onceki else "duzenle"),
+                    dosya=receipt.get("_dosya"), kayit=receipt.get("_yukleme_id"),
+                    degisiklikler={
+                        alan: [onceki_degerler[alan], receipt.get(alan)]
+                        for alan in sorted(changed_fields)
+                    },
+                )
                 learned_count = excel_ogrenme.duzeltmelerden_ogren(
                     receipt, changed_fields, onceki_degerler
                 )
@@ -973,6 +1334,8 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
             self.send_json({
                 "ok": True, "receipt": receipt, "ogrenilen": learned_count,
             })
+        except IslemCakismasi as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.CONFLICT)
         except LookupError as exc:
             self.send_json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
         except (ValueError, json.JSONDecodeError, OSError) as exc:
@@ -993,7 +1356,7 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
             )
             ext = uzanti_belirle(self.headers.get("Content-Type"), orijinal_ad)
             kaynak = (self.headers.get("X-Kaynak") or "telefon").strip().lower()
-            sonuc = fotografi_kabul_et(data, ext, orijinal_ad, kaynak=kaynak)
+            sonuc = fotografi_kabul_et(data, ext, orijinal_ad, kaynak=kaynak, kim=self.kim())
         except ValueError as exc:
             self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             return
@@ -1051,6 +1414,11 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
                 receipt = eslesen[0] if eslesen else None
                 if receipt is None:
                     raise LookupError(f"Kayıt bulunamadı: {filename}")
+                if receipt.get("_isleniyor"):
+                    # OCR bitince kayıt OCR sonucuyla değişir; değişiklik kaybolmasın.
+                    raise IslemCakismasi(
+                        "Bu fişin OCR işlemi sürüyor; bitince tekrar deneyin."
+                    )
 
                 mevcut = find_image(filename)
                 if mevcut:
@@ -1061,12 +1429,17 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
 
                 receipt["_silindi"] = True
                 receipt["_silinme_zamani"] = datetime.now().isoformat(timespec="seconds")
+                receipt["_silen"] = (self.kim() or {}).get("ad")
                 image_hash = receipt.get("_dosya_hash")
                 if image_hash and IMAGE_HASHES.get(image_hash) == filename:
                     IMAGE_HASHES.pop(image_hash, None)
                 save_receipts(receipts)
+                self.denetle("sil", dosya=filename, kayit=receipt.get("_yukleme_id"),
+                             fis_no=receipt.get("fis_no"))
 
             self.send_json({"ok": True})
+        except IslemCakismasi as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.CONFLICT)
         except LookupError as exc:
             self.send_json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
         except (ValueError, json.JSONDecodeError, OSError) as exc:
@@ -1086,10 +1459,20 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
 
             with DATA_LOCK:
                 data_file, images_dir, salt_okunur = parti_yonetimi.parti_yollari(parti_id)
-                excel_aktar.DATA_FILE = data_file
-                sonuc = excel_aktar.aktar(Path(dosya), sayfa, baslangic, tumu=tumu)
+                sonuc = excel_aktar.aktar(
+                    Path(dosya), sayfa, baslangic, tumu=tumu, data_file=data_file,
+                    kullanici=(self.kim() or {}).get("ad"))
                 if salt_okunur:
                     parti_yonetimi.arsiv_manifesti_yaz(data_file.parent)
+                self.denetle(
+                    "excel_aktar_hata" if "hata" in sonuc else "excel_aktar",
+                    parti=parti_id, hedef=str(dosya), sayfa=sayfa, tumu=tumu,
+                    aktarilan=sonuc.get("aktarilan"), tamamlanan=sonuc.get("tamamlanan"),
+                    dosyalar=[d.get("dosya") for d in sonuc.get("detay", [])],
+                    kayitlar=[d.get("kayit") for d in sonuc.get("detay", [])],
+                    satirlar=[d.get("satir") for d in sonuc.get("detay", [])],
+                    hata=sonuc.get("hata"),
+                )
             if "hata" in sonuc:
                 self.send_json({"error": sonuc["hata"]}, HTTPStatus.BAD_REQUEST)
                 return
@@ -1118,6 +1501,7 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
             if hedef.exists():
                 hedef = benzersiz_hedef(hedef_klasor, Path(ad).stem, Path(ad).suffix.lower())
             hedef.write_bytes(self.rfile.read(length))
+            self.denetle("excel_yukle", hedef=str(hedef))
 
             self.send_json({"ok": True, "yol": str(hedef), "ad": hedef.name})
         except ValueError as exc:
@@ -1137,6 +1521,8 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
             if not excel_aktar.yol_guvenli_mi(yol):
                 raise ValueError("Bu dosyaya erişim izni yok")
             sonuc = excel_ogrenme.referans_olustur(yol, sayfa)
+            self.denetle("excel_ogren", hedef=str(yol), sayfa=sayfa,
+                         satir_sayisi=sonuc.get("satir_sayisi"))
             self.send_json({
                 "ok": True,
                 "durum": excel_ogrenme.durum(),
@@ -1154,7 +1540,7 @@ class ReceiptHandler(SimpleHTTPRequestHandler):
 def main() -> None:
     import argparse
 
-    global DATA_FILE, FISLER_DIR, GELEN_DIR
+    global DATA_FILE, FISLER_DIR, GELEN_DIR, PARTI_KURTARMA
 
     parser = argparse.ArgumentParser(description="Fiş OCR kontrol arayüzü")
     parser.add_argument("--port", type=int, default=8765)
@@ -1190,6 +1576,16 @@ def main() -> None:
     FISLER_DIR.mkdir(exist_ok=True)
     GELEN_DIR.mkdir(parents=True, exist_ok=True)
     parti_yonetimi.yollari_ayarla(ROOT, DATA_FILE, FISLER_DIR)
+    # Parti kapatma yarıda kesildiyse görseller/kayıtlar taşınmadan önce uzlaştır.
+    erisim.yolu_ayarla(ROOT)
+    denetim.yolu_ayarla(ROOT)
+    kurtarma = PARTI_KURTARMA = parti_yonetimi.yarim_parti_islemini_kurtar()
+    if kurtarma and kurtarma["durum"] == "cakisma":
+        print(f"UYARI: {kurtarma['mesaj']}:")
+        for yol in kurtarma["cakisan"]:
+            print(f"  {yol}")
+    elif kurtarma:
+        print(f"Yarım kalan parti kapatma uzlaştırıldı ({kurtarma['durum']}).")
     hash_indeksini_hazirla()
     try:
         ogrenilen_eslesme = excel_ogrenme.gecmis_duzeltmelerden_eslesme_ogren(
@@ -1206,16 +1602,11 @@ def main() -> None:
     os.chdir(UI_DIR)
     local_address = f"http://127.0.0.1:{args.port}"
     server = ThreadingHTTPServer((args.host, args.port), ReceiptHandler)
-    threading.Thread(target=ocr_worker, name="ocr-worker", daemon=True).start()
+    threading.Thread(target=ocr_worker, args=(OCR_QUEUE,), name="ocr-worker", daemon=True).start()
 
     # Sunucu kapanıp açılmışsa tamamlanmamış OCR kayıtlarına kaldığı yerden devam et.
-    with DATA_LOCK:
-        for receipt in load_receipts():
-            if receipt.get("_isleniyor"):
-                image_path = find_image(receipt.get("_dosya", ""))
-                if image_path:
-                    image_hash = receipt.get("_dosya_hash") or dosya_hashi(image_path)
-                    OCR_QUEUE.put((image_path, image_hash))
+    for is_ in yarim_ocr_kayitlarini_kurtar():
+        OCR_QUEUE.put(is_)
 
     # Gelen kutusu, yarım kalan OCR kayıtları kuyruğa girdikten sonra izlenir.
     threading.Thread(target=gelen_izleyici, name="gelen-izleyici", daemon=True).start()
@@ -1223,7 +1614,11 @@ def main() -> None:
     print(f"Fiş kontrol arayüzü (bu bilgisayardan): {local_address}")
     print(f"Toplu ekleme için fotoğrafları şu klasöre at: {GELEN_DIR}")
     if args.host != "127.0.0.1":
-        print(f"Telefondan fotoğraf çekmek için (aynı WiFi'de): http://{lan_ip()}:{args.port}/cek")
+        print("Telefondan fotoğraf çekmek için (aynı WiFi'de) bu bağlantıyı aç:")
+        print(f"  http://{lan_ip()}:{args.port}/cek?anahtar={erisim.yukleme_anahtari()}")
+        if not erisim.kullanici_var_mi():
+            print("(Tek kullanıcı modu: ağdan yalnızca bu bağlantıyla fotoğraf yüklenebilir.")
+            print(" Başka bilgisayarlardan kontrol için: python -m mazot.erisim ekle <ad> kontrol)")
         print("(Telefon ve bilgisayar aynı WiFi ağında olmalı; Windows Güvenlik")
         print(" Duvarı bu portu ilk seferde sorarsa 'İzin ver' demen gerekebilir.)")
     print("Kapatmak için Ctrl+C")

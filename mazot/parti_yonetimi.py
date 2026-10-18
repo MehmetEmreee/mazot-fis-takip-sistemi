@@ -19,15 +19,23 @@ DATA_FILE = ROOT / "sonuclar.json"
 FISLER_DIR = ROOT / "fisler"
 ARSIV_DIR = ROOT / "arsiv"
 AKTIF_META_FILE = ROOT / "aktif_parti.json"
+# Parti kapatma sürerken var olan işlem günlüğü; süreç yarıda kesilirse
+# başlangıçta yarim_parti_islemini_kurtar() buna bakarak tamamlar/geri alır.
+ISLEM_GUNLUGU = ROOT / ".parti_islemi.json"
+
+
+class PartiIslemHatasi(OSError):
+    pass
 
 
 def yollari_ayarla(root: Path, data_file: Path | None = None, fisler_dir: Path | None = None) -> None:
-    global ROOT, DATA_FILE, FISLER_DIR, ARSIV_DIR, AKTIF_META_FILE
+    global ROOT, DATA_FILE, FISLER_DIR, ARSIV_DIR, AKTIF_META_FILE, ISLEM_GUNLUGU
     ROOT = Path(root).resolve()
     DATA_FILE = Path(data_file or ROOT / "sonuclar.json").resolve()
     FISLER_DIR = Path(fisler_dir or ROOT / "fisler").resolve()
     ARSIV_DIR = ROOT / "arsiv"
     AKTIF_META_FILE = ROOT / "aktif_parti.json"
+    ISLEM_GUNLUGU = ROOT / ".parti_islemi.json"
 
 
 def _json_oku(yol: Path, varsayilan):
@@ -200,16 +208,133 @@ def parti_yollari(parti_id: str | None) -> tuple[Path, Path, bool]:
     return klasor / "sonuclar.json", klasor / "fisler", True
 
 
+def _dosya_ozeti(yol: Path) -> str:
+    ozet = hashlib.sha256()
+    with yol.open("rb") as dosya:
+        for parca in iter(lambda: dosya.read(1024 * 1024), b""):
+            ozet.update(parca)
+    return ozet.hexdigest()
+
+
+def _klasoru_geri_birlestir(kaynak: Path, hedef: Path) -> list[str]:
+    """kaynak'taki dosyaları hedef'e geri taşır. Hedefte aynı içerikli dosya
+    varsa kaynaktaki fazlalık silinir; farklı içerikli dosyanın üzerine
+    yazılmaz, çakışma olarak döndürülür. (Farklı disklerde shutil.move
+    kopyala+sil yaptığı için kesinti iki tarafta da dosya bırakabilir.)"""
+    if not hedef.exists():
+        shutil.move(str(kaynak), str(hedef))
+        return []
+    cakisan = []
+    for yol in sorted(p for p in kaynak.rglob("*") if p.is_file()):
+        goreli = yol.relative_to(kaynak)
+        karsi = hedef / goreli
+        if not karsi.exists():
+            karsi.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(yol), str(karsi))
+        elif karsi.is_file() and karsi.stat().st_size == yol.stat().st_size \
+                and _dosya_ozeti(karsi) == _dosya_ozeti(yol):
+            yol.unlink()
+        else:
+            cakisan.append(str(yol))
+    for klasor in sorted((p for p in kaynak.rglob("*") if p.is_dir()), reverse=True):
+        try:
+            klasor.rmdir()
+        except OSError:
+            pass
+    try:
+        kaynak.rmdir()
+    except OSError:
+        pass
+    return cakisan
+
+
+def _arsivi_geri_al(hedef: Path) -> list[str]:
+    """Yarım kalmış arşivlemeyi geri alır; çakışan dosyaları döndürür."""
+    cakisan = []
+    hedef_data = hedef / "sonuclar.json"
+    if hedef_data.exists():
+        if not DATA_FILE.exists():
+            os.replace(hedef_data, DATA_FILE)
+        elif DATA_FILE.read_bytes() == hedef_data.read_bytes():
+            hedef_data.unlink()
+        else:
+            cakisan.append(str(hedef_data))
+    hedef_fisler = hedef / "fisler"
+    if hedef_fisler.exists():
+        cakisan += _klasoru_geri_birlestir(hedef_fisler, FISLER_DIR)
+    if not cakisan and hedef.is_dir():
+        for ad in ("parti.json", "manifest.json"):
+            (hedef / ad).unlink(missing_ok=True)
+        for gecici in hedef.glob(".*.tmp"):  # yarıda kesilmiş _json_yaz
+            gecici.unlink(missing_ok=True)
+        try:
+            hedef.rmdir()
+        except OSError:
+            pass
+    return cakisan
+
+
+def _yeni_aktifi_baslat(yeni: dict) -> None:
+    """Arşivleme bittikten sonra boş aktif partiyi açar; tekrar çağrılabilir."""
+    FISLER_DIR.mkdir(parents=True, exist_ok=True)
+    if not DATA_FILE.exists():
+        _json_yaz(DATA_FILE, [])
+    _json_yaz(AKTIF_META_FILE, yeni)
+    ISLEM_GUNLUGU.unlink(missing_ok=True)
+
+
+def yarim_parti_islemini_kurtar() -> dict | None:
+    """Süreç parti kapatırken kesildiyse diskteki durumu uzlaştırır.
+
+    Arşivleme tamamlanmışsa (aşama 'arsivlendi') yeni aktif parti açılarak
+    işlem ileri tamamlanır; değilse taşınan veri ve görseller aktif partiye
+    geri alınır. Çelişen dosyaların üzerine yazılmaz: günlük korunur ve
+    'cakisma' döner, yeni parti kapatma o zamana kadar reddedilir.
+    """
+    for ad in (ISLEM_GUNLUGU.name, AKTIF_META_FILE.name):
+        for gecici in ROOT.glob(f".{ad}.*.tmp"):  # yarıda kesilmiş _json_yaz
+            gecici.unlink(missing_ok=True)
+    gunluk = _json_oku(ISLEM_GUNLUGU, None)
+    if gunluk is None:
+        if ISLEM_GUNLUGU.exists():
+            return {"durum": "cakisma", "cakisan": [str(ISLEM_GUNLUGU)],
+                    "mesaj": "Parti işlem günlüğü okunamadı"}
+        return None
+    hedef = Path(gunluk.get("hedef") or "")
+    if gunluk.get("asama") == "arsivlendi" and (hedef / "sonuclar.json").is_file():
+        _yeni_aktifi_baslat(gunluk["yeni"])
+        return {"durum": "tamamlandi", "arsiv": hedef.name}
+    cakisan = _arsivi_geri_al(hedef) if gunluk.get("hedef") else []
+    if cakisan:
+        return {"durum": "cakisma", "cakisan": cakisan,
+                "mesaj": "Yarım kalan parti kapatma geri alınamadı; çelişen dosyalar var"}
+    ISLEM_GUNLUGU.unlink(missing_ok=True)
+    return {"durum": "geri_alindi", "arsiv": hedef.name}
+
+
 def yeni_parti(acilacak_ad: str, excel_sonucu: dict | None = None) -> dict:
     """Aktif partiyi arşivler ve boş bir aktif parti açar.
 
-    Excel aktarımı bu fonksiyondan önce yapılır. Aynı disk üzerindeki taşıma
-    işlemleri adım adım geri alınabildiği için hata halinde aktif veri korunur.
+    Excel aktarımı bu fonksiyondan önce yapılır. Taşımadan önce işlem günlüğü
+    yazılır: hata halinde adımlar burada, süreç kesilirse başlangıçta
+    yarim_parti_islemini_kurtar() ile geri alınır ya da tamamlanır.
     """
+    if ISLEM_GUNLUGU.exists():
+        kurtarma = yarim_parti_islemini_kurtar()
+        if kurtarma and kurtarma["durum"] == "cakisma":
+            raise PartiIslemHatasi(
+                f"{kurtarma['mesaj']}: {', '.join(kurtarma['cakisan'][:5])}"
+            )
     acilacak_ad = _temiz_ad(acilacak_ad)
     onceki = aktif_parti()
     kayitlar = _json_oku(DATA_FILE, [])
     arsivlenen = None
+    yeni = {
+        "id": "aktif",
+        "ad": acilacak_ad,
+        "olusturma_zamani": datetime.now().isoformat(timespec="seconds"),
+        "aktif": True,
+    }
 
     if kayitlar:
         zaman = datetime.now()
@@ -220,17 +345,14 @@ def yeni_parti(acilacak_ad: str, excel_sonucu: dict | None = None) -> dict:
         while hedef.exists():
             hedef = ARSIV_DIR / f"{taban}_{sayac}"
             sayac += 1
-        hedef.mkdir()
-        hedef_data = hedef / "sonuclar.json"
-        hedef_fisler = hedef / "fisler"
-        data_tasindi = False
-        fisler_tasindi = False
+        gunluk = {"hedef": str(hedef), "asama": "basladi", "yeni": yeni,
+                  "zaman": zaman.isoformat(timespec="seconds")}
+        _json_yaz(ISLEM_GUNLUGU, gunluk)
         try:
-            os.replace(DATA_FILE, hedef_data)
-            data_tasindi = True
+            hedef.mkdir()
+            os.replace(DATA_FILE, hedef / "sonuclar.json")
             if FISLER_DIR.exists():
-                shutil.move(str(FISLER_DIR), str(hedef_fisler))
-                fisler_tasindi = True
+                shutil.move(str(FISLER_DIR), str(hedef / "fisler"))
             meta = {
                 "id": hedef.name,
                 "ad": onceki["ad"],
@@ -247,19 +369,10 @@ def yeni_parti(acilacak_ad: str, excel_sonucu: dict | None = None) -> dict:
                 )
             arsivlenen = {**meta, **_ozet(kayitlar)}
         except Exception:
-            if fisler_tasindi and hedef_fisler.exists() and not FISLER_DIR.exists():
-                shutil.move(str(hedef_fisler), str(FISLER_DIR))
-            if data_tasindi and hedef_data.exists() and not DATA_FILE.exists():
-                os.replace(hedef_data, DATA_FILE)
+            if not _arsivi_geri_al(hedef):
+                ISLEM_GUNLUGU.unlink(missing_ok=True)
             raise
+        _json_yaz(ISLEM_GUNLUGU, {**gunluk, "asama": "arsivlendi"})
 
-    FISLER_DIR.mkdir(parents=True, exist_ok=True)
-    _json_yaz(DATA_FILE, [])
-    yeni = {
-        "id": "aktif",
-        "ad": acilacak_ad,
-        "olusturma_zamani": datetime.now().isoformat(timespec="seconds"),
-        "aktif": True,
-    }
-    _json_yaz(AKTIF_META_FILE, yeni)
+    _yeni_aktifi_baslat(yeni)
     return {"aktif": aktif_parti(), "arsivlenen": arsivlenen}
