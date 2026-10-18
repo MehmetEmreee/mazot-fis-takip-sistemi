@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 
 
 TABLO_ALANLARI = ("fis_no", "tarih", "firma", "plaka", "ad_soyad", "km", "litre")
@@ -50,6 +51,26 @@ def firmayi_duzelt(firma) -> str:
     return metin
 
 
+TARIH_DESENI = re.compile(r"^\s*(\d{1,2})\s*[./\-]\s*(\d{1,2})\s*[./\-]\s*(\d{4}|\d{2})\s*$")
+
+
+def tarihi_duzelt(tarih) -> str:
+    """Tarihi tek biçime getirir: GG.AA.YYYY (8/10/2026 → 08.10.2026,
+    07-10-26 → 07.10.2026). Takvimde olmayan veya çözülemeyen değer olduğu
+    gibi bırakılır; doğrulama onu ayrıca işaretler."""
+    metin = bos_degeri_duzelt(tarih)
+    m = TARIH_DESENI.match(metin)
+    if not m:
+        return metin
+    gun, ay, yil = int(m[1]), int(m[2]), int(m[3])
+    if yil < 100:
+        yil += 2000
+    try:
+        return date(yil, ay, gun).strftime("%d.%m.%Y")
+    except ValueError:
+        return metin
+
+
 def kilometreyi_duzelt(km) -> str:
     """Tek haneli OCR kilometrelerini okunamamış değer olarak işaretler."""
     metin = bos_degeri_duzelt(km)
@@ -64,6 +85,7 @@ def fis_normalize_et(veri: dict) -> dict:
         None if veri.get("firma") == BOS_DEGER else veri.get("firma")
     )
     veri["km"] = kilometreyi_duzelt(veri.get("km"))
+    veri["tarih"] = tarihi_duzelt(veri.get("tarih"))
     veri["plaka"] = plakayi_duzelt(
         veri.get("plaka"), bool(veri.get("_ekipman_durumu"))
     )

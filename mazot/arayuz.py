@@ -31,7 +31,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from .extract_json import resmi_oku  # noqa: E402
-from .dogrulama import kaydi_dogrula  # noqa: E402
+from .dogrulama import FIS_NO_DESENI, kaydi_dogrula, tarih_yilini_duzelt  # noqa: E402
 from .normalizasyon import fis_normalize_et  # noqa: E402
 from . import excel_aktar  # noqa: E402
 from . import excel_ogrenme  # noqa: E402
@@ -486,9 +486,13 @@ def fisi_isle(image_path: Path, image_hash: str) -> None:
                     record[anahtar] = onceki[anahtar]
             receipts[index] = record
 
+        # Tarih aralığı fişin yüklendiği güne göredir; yükleme zamanı artık kayıtta.
+        if not record.get("HATA") and tarih_yilini_duzelt(record):
+            kaydi_dogrula(record)
+
         IMAGE_HASHES[image_hash] = record.get("_dosya", original_name)
         fis_no = str(record.get("fis_no") or "").strip()
-        if re.fullmatch(r"\d{6}", fis_no):
+        if FIS_NO_DESENI.fullmatch(fis_no):
             diger = next(
                 (item for i, item in enumerate(receipts)
                  if i != index and not item.get("_isleniyor")
