@@ -5,7 +5,7 @@
 
 | Komut | Amaç |
 | --- | --- |
-| `python -m tools.ocr_benchmark --set data/benchmark_testseti.json --model qwen2.5vl:7b --esik-tam 35 --esik-alan 85` | Sabit test setinde OCR doğruluğu ve süresi (eşik altı → çıkış kodu 1) |
+| `python -m tools.ocr_benchmark --set data/benchmark_testseti.json --model qwen2.5vl:7b --esik-tam 30 --esik-alan 84` | Sabit test setinde OCR doğruluğu ve süresi (eşik altı → çıkış kodu 1). 2026-10-18 ölçümü: alan %85,9, tam fiş %34, 4,97 sn/fiş; aynı ayarla iki koşu arasında ±1-2 fiş fark olabilir, eşiği bu payla seçin |
 | `python -m tools.duzeltme_benchmark --excel <defter.xlsx> --rapor <ocr raporu>` | Otomatik düzeltmeyi sızıntısız ölçme |
 | `python -m tools.ogrenme_benchmark` | Öğrenme önerilerinin isabeti |
 | `python -m tools.benzerlik_karsilastir` | Benzerlik ölçülerini karşılaştırma |
